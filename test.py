@@ -222,7 +222,6 @@ def health():
 
 # ---------------- START ----------------
 if __name__ == "__main__":
-if __name__ == "__main__":
     with app.app_context():
         db.create_all()
         # Mevcut admin varsa temizleyelim ki yeni şifre aktif olsun (Sadece ilk kurulum için)
