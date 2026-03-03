@@ -20,14 +20,18 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ---------------- CONFIG ----------------
+# ---------------- CONFIG ----------------
 class Config:
-    SECRET_KEY = os.getenv("SECRET_KEY", "secret-v71")
-    JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "jwt-secret-v71")
-    SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL")
+    # Render Dashboard -> Environment kısmına SECRET_KEY eklediysen onu alır, yoksa varsayılanı kullanır
+    SECRET_KEY = os.getenv("SECRET_KEY", "cok-gizli-anahtar-123")
+    JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "jwt-ozel-anahtar-456")
+    
+    # Burası kritik: Eğer Environment'ta DATABASE_URL yoksa hata vermemesi için sqlite'a döner
+    SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL", "sqlite:///fallback.db")
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=2)
-
+    
 app = Flask(__name__)
 app.config.from_object(Config)
 
