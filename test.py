@@ -124,7 +124,7 @@ UI = """
         const p = document.getElementById('p').value;
         
         try {
-            let res = await fetch('/api/login', {
+            let res = await fetch(window.location.origin + '/api/login', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({u, p})
