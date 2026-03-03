@@ -21,15 +21,12 @@ load_dotenv()
 
 # ---------------- CONFIG ----------------
 class Config:
-    SECRET_KEY = os.getenv("SECRET_KEY", "secret")
-    JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "jwt-secret")
-    SQLALCHEMY_DATABASE_URI = os.getenv(
-        "DATABASE_URL", "sqlite:///enterprise.db"
-    )
+    SECRET_KEY = os.getenv("SECRET_KEY", "secret-v71")
+    JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "jwt-secret-v71")
+    SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL")
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=2)
-
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -39,8 +36,12 @@ bcrypt = Bcrypt(app)
 jwt = JWTManager(app)
 limiter = Limiter(app=app, key_func=get_remote_address)
 
-celery = Celery(app.import_name, broker=app.config["REDIS_URL"])
-celery.conf.update(app.config)
+# Celery konfigürasyonu (Eğer Redis yoksa hata vermemesi için try-except)
+try:
+    celery = Celery(app.import_name, broker=app.config["REDIS_URL"])
+    celery.conf.update(app.config)
+except:
+    celery = None
 
 # ---------------- MODELS ----------------
 class User(db.Model):
@@ -52,86 +53,129 @@ class User(db.Model):
     is_admin = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-
 class TokenBlocklist(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     jti = db.Column(db.String(36), nullable=False, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-
 # ---------------- CELERY TASK ----------------
-@celery.task(bind=True, max_retries=3)
-def background_bot_task(self, user_id):
-    with app.app_context():
-        user = User.query.get(user_id)
-        if not user or not user.is_active:
-            return "Bot Pasif"
-        try:
-            time.sleep(random.randint(3, 6))
-            user.coins += 25
-            db.session.commit()
-            return "Coin eklendi"
-        except Exception as exc:
-            raise self.retry(exc=exc, countdown=60)
-
+if celery:
+    @celery.task(bind=True, max_retries=3)
+    def background_bot_task(self, user_id):
+        with app.app_context():
+            user = User.query.get(user_id)
+            if not user or not user.is_active:
+                return "Bot Pasif"
+            try:
+                time.sleep(random.randint(3, 6))
+                user.coins += 25
+                db.session.commit()
+                return "Coin eklendi"
+            except Exception as exc:
+                raise self.retry(exc=exc, countdown=60)
 
 # ---------------- JWT BLOCKLIST ----------------
 @jwt.token_in_blocklist_loader
 def check_if_token_revoked(jwt_header, jwt_payload):
-    return (
-        db.session.query(TokenBlocklist.id)
-        .filter_by(jti=jwt_payload["jti"])
-        .scalar()
-        is not None
-    )
+    return db.session.query(TokenBlocklist.id).filter_by(jti=jwt_payload["jti"]).scalar() is not None
 
-
-# ---------------- FRONTEND ----------------
+# ---------------- FRONTEND (FIXED) ----------------
 UI = """
 <!DOCTYPE html>
 <html>
 <head>
-<title>TopFollow Enterprise</title>
-<script src="https://cdn.tailwindcss.com"></script>
+    <title>TopFollow Pro v71</title>
+    <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body class="bg-slate-900 text-white p-6">
-<div class="max-w-xl mx-auto">
-<div id="login">
-<input id="u" placeholder="Username" class="text-black p-2"/>
-<input id="p" type="password" placeholder="Password" class="text-black p-2"/>
-<button onclick="login()" class="bg-blue-600 p-2">Login</button>
-</div>
-<div id="dash" class="hidden">
-<h2>Coins: <span id="coins"></span></h2>
-<button onclick="toggleBot()" id="botbtn" class="bg-green-600 p-2">Toggle Bot</button>
-<button onclick="logout()" class="bg-red-600 p-2">Logout</button>
-</div>
-</div>
-<script>
-async function login(){
-let res=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({u:u.value,p:p.value})})
-let data=await res.json()
-if(data.token){localStorage.token=data.token;loadDash()}
-}
-async function loadDash(){
-let res=await fetch('/api/status',{headers:{Authorization:'Bearer '+localStorage.token}})
-let data=await res.json()
-login.classList.add('hidden')
-dash.classList.remove('hidden')
-coins.innerText=data.coins
-botbtn.innerText=data.active?'Stop Bot':'Start Bot'
-}
-async function toggleBot(){
-let res=await fetch('/api/toggle',{method:'POST',headers:{Authorization:'Bearer '+localStorage.token}})
-let data=await res.json()
-botbtn.innerText=data.active?'Stop Bot':'Start Bot'
-}
-async function logout(){
-await fetch('/api/logout',{method:'DELETE',headers:{Authorization:'Bearer '+localStorage.token}})
-localStorage.clear()
-location.reload()
-}
-</script>
+<body class="bg-slate-900 text-white p-6 font-sans">
+    <div class="max-w-md mx-auto bg-slate-800 p-8 rounded-xl shadow-2xl mt-10">
+        <h1 class="text-2xl font-bold mb-6 text-center text-blue-400">TopFollow Enterprise</h1>
+        
+        <div id="loginSection">
+            <div class="space-y-4">
+                <input id="u" placeholder="Kullanıcı Adı" class="w-full text-black p-3 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"/>
+                <input id="p" type="password" placeholder="Şifre" class="w-full text-black p-3 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"/>
+                <button onclick="handleLogin()" class="w-full bg-blue-600 hover:bg-blue-700 p-3 rounded-lg font-bold transition">Giriş Yap</button>
+                <p id="errMsg" class="text-red-500 text-sm text-center hidden">Hatalı kullanıcı adı veya şifre!</p>
+            </div>
+        </div>
+
+        <div id="dashSection" class="hidden text-center">
+            <div class="bg-slate-700 p-4 rounded-lg mb-6">
+                <p class="text-gray-400">Mevcut Bakiyeniz</p>
+                <h2 class="text-4xl font-black text-yellow-400"><span id="coinDisplay">0</span> 🪙</h2>
+            </div>
+            <div class="flex flex-col space-y-3">
+                <button onclick="toggleBot()" id="botBtn" class="bg-green-600 hover:bg-green-700 p-3 rounded-lg font-bold transition">Botu Başlat</button>
+                <button onclick="handleLogout()" class="bg-red-600/20 hover:bg-red-600 text-red-500 hover:text-white p-3 rounded-lg font-bold transition border border-red-600/50">Çıkış Yap</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    const loginSection = document.getElementById('loginSection');
+    const dashSection = document.getElementById('dashSection');
+    const coinDisplay = document.getElementById('coinDisplay');
+    const botBtn = document.getElementById('botBtn');
+    const errMsg = document.getElementById('errMsg');
+
+    async function handleLogin(){
+        const u = document.getElementById('u').value;
+        const p = document.getElementById('p').value;
+        
+        try {
+            let res = await fetch('/api/login', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({u, p})
+            });
+            let data = await res.json();
+            
+            if(data.token){
+                localStorage.token = data.token;
+                loadDash();
+            } else {
+                errMsg.classList.remove('hidden');
+            }
+        } catch(e) {
+            alert("Sunucuya bağlanılamadı!");
+        }
+    }
+
+    async function loadDash(){
+        if(!localStorage.token) return;
+        
+        let res = await fetch('/api/status', {
+            headers: {Authorization: 'Bearer ' + localStorage.token}
+        });
+        
+        if(res.status === 401) return handleLogout();
+        
+        let data = await res.json();
+        loginSection.classList.add('hidden');
+        dashSection.classList.remove('hidden');
+        coinDisplay.innerText = data.coins;
+        botBtn.innerText = data.active ? 'Botu Durdur' : 'Botu Başlat';
+        botBtn.className = data.active ? 'bg-orange-600 p-3 rounded-lg font-bold' : 'bg-green-600 p-3 rounded-lg font-bold';
+    }
+
+    async function toggleBot(){
+        let res = await fetch('/api/toggle', {
+            method: 'POST',
+            headers: {Authorization: 'Bearer ' + localStorage.token}
+        });
+        let data = await res.json();
+        loadDash();
+    }
+
+    function handleLogout(){
+        localStorage.clear();
+        location.reload();
+    }
+
+    // Sayfa açıldığında token varsa dash'i yükle
+    if(localStorage.token) loadDash();
+    </script>
 </body>
 </html>
 """
@@ -141,26 +185,15 @@ location.reload()
 def index():
     return render_template_string(UI)
 
-
 @app.route("/api/login", methods=["POST"])
-@limiter.limit("5 per minute")
+@limiter.limit("10 per minute")
 def login_api():
     data = request.json
     user = User.query.filter_by(username=data.get("u")).first()
     if user and bcrypt.check_password_hash(user.password_hash, data.get("p")):
-        token = create_access_token(identity=user.id)
+        token = create_access_token(identity=str(user.id))
         return jsonify(token=token)
     return jsonify(msg="Hatalı"), 401
-
-
-@app.route("/api/logout", methods=["DELETE"])
-@jwt_required()
-def logout_api():
-    jti = get_jwt()["jti"]
-    db.session.add(TokenBlocklist(jti=jti))
-    db.session.commit()
-    return jsonify(msg="Çıkış yapıldı")
-
 
 @app.route("/api/status")
 @jwt_required()
@@ -168,29 +201,31 @@ def status():
     user = User.query.get(get_jwt_identity())
     return jsonify(coins=user.coins, active=user.is_active)
 
-
 @app.route("/api/toggle", methods=["POST"])
 @jwt_required()
 def toggle():
     user = User.query.get(get_jwt_identity())
     user.is_active = not user.is_active
     db.session.commit()
-    if user.is_active:
+    # Celery varsa görevi başlat
+    if celery and user.is_active:
         background_bot_task.delay(user.id)
     return jsonify(active=user.is_active)
-
 
 @app.route("/health")
 def health():
     return jsonify(status="ok")
 
-
 # ---------------- START ----------------
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
+        # Admin hesabı yoksa oluştur
         if not User.query.filter_by(username="admin").first():
             pw = bcrypt.generate_password_hash("admin123").decode("utf-8")
             db.session.add(User(username="admin", password_hash=pw, is_admin=True))
             db.session.commit()
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+            print("✅ Admin hesabı hazır: admin / admin123")
+    
+    port = int(os.getenv("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
