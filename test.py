@@ -222,14 +222,22 @@ def health():
 
 # ---------------- START ----------------
 if __name__ == "__main__":
+if __name__ == "__main__":
     with app.app_context():
         db.create_all()
-        # Admin hesabı yoksa oluştur
-        if not User.query.filter_by(username="admin").first():
+        # Mevcut admin varsa temizleyelim ki yeni şifre aktif olsun (Sadece ilk kurulum için)
+        admin = User.query.filter_by(username="admin").first()
+        if not admin:
             pw = bcrypt.generate_password_hash("admin123").decode("utf-8")
-            db.session.add(User(username="admin", password_hash=pw, is_admin=True))
+            new_admin = User(username="admin", password_hash=pw, is_admin=True)
+            db.session.add(new_admin)
             db.session.commit()
-            print("✅ Admin hesabı hazır: admin / admin123")
+            print("✅ YENİ ADMİN OLUŞTURULDU: admin / admin123")
+        else:
+            print("✅ Admin zaten mevcut, giriş yapabilirsin.")
+            
+    port = int(os.getenv("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
     
     port = int(os.getenv("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
