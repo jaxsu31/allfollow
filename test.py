@@ -23,26 +23,23 @@ load_dotenv()
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv("SECRET_KEY", "secret-key-123")
 
-# BELLEK İÇİ VERİ DEPOLAMA - Hiçbir dosya/database yok!
-# Thread-safe dictionary
+# BELLEK İÇİ VERİ DEPOLAMA
 accounts_lock = threading.Lock()
-accounts_store = {}  # {username: {data}}
+accounts_store = {}
 
 # PROXY
 PROXY_URL = "http://SDDLzRveLbkavJr:MPvdO65MOnMifL7@82.41.250.136:42158"
 logger.info(f"Proxy: {PROXY_URL[:30]}...")
 
 def get_account(username):
-    """Thread-safe hesap okuma"""
     with accounts_lock:
         return accounts_store.get(username.lower())
 
 def save_account(username, data):
-    """Thread-safe hesap yazma"""
     with accounts_lock:
         accounts_store[username.lower()] = {
             'username': username,
-            'password_hash': data.get('password_hash', ''),  # Hash'lenmiş
+            'password_hash': data.get('password_hash', ''),
             'status': data.get('status', 'Beklemede'),
             'login_attempts': data.get('login_attempts', 0),
             'last_login': data.get('last_login'),
@@ -52,8 +49,8 @@ def save_account(username, data):
             'created_at': data.get('created_at', datetime.now().isoformat())
         }
 
-# Login script (öncekiyle aynı)
-LOGIN_SCRIPT_TEMPLATE = '''
+# DÜZELTİLMİŞ LOGIN SCRIPT - SyntaxError giderildi
+LOGIN_SCRIPT_TEMPLATE = r'''
 import sys
 import json
 import time
@@ -63,23 +60,23 @@ USERNAME = sys.argv[1]
 PASSWORD = sys.argv[2]
 PROXY = sys.argv[3] if len(sys.argv) > 3 else None
 
-log_file = open(f"/tmp/ig_debug_{{USERNAME}}.log", "w", buffering=1)
+log_file = open(f"/tmp/ig_debug_{USERNAME}.log", "w", buffering=1)
 def log(msg):
     timestamp = time.strftime('%H:%M:%S')
-    line = f"{{timestamp}} - {{msg}}"
-    log_file.write(line + "\\\\n")
+    line = f"{timestamp} - {msg}"
+    log_file.write(line + "\n")
     log_file.flush()
     print(line, file=sys.stderr)
 
 log("="*50)
-log(f"KULLANICI: {{USERNAME}}")
-log(f"ŞİFRE UZUNLUK: {{len(PASSWORD)}}")
-log(f"ŞİFRE (ilk 3): {{PASSWORD[:3]}}***")
+log(f"KULLANICI: {USERNAME}")
+log(f"ŞİFRE UZUNLUK: {len(PASSWORD)}")
+log(f"ŞİFRE (ilk 3): {PASSWORD[:3]}***")
 log("="*50)
 
 if not PASSWORD:
-    log("❌ ŞİFRE BOŞ!")
-    print(json.dumps({{"status": "error", "error": "Şifre boş"}}))
+    log("HATA: ŞİFRE BOŞ!")
+    print(json.dumps({"status": "error", "error": "Şifre boş"}))
     sys.exit(1)
 
 try:
@@ -89,10 +86,10 @@ try:
         PleaseWaitFewMinutes, BadPassword,
         TwoFactorRequired, ClientError
     )
-    log("✅ instagrapi import edildi")
+    log("OK: instagrapi import edildi")
 except Exception as e:
-    log(f"❌ Import hatası: {{e}}")
-    print(json.dumps({{"status": "error", "error": f"Import: {{str(e)}}"}}))
+    log(f"HATA Import: {e}")
+    print(json.dumps({"status": "error", "error": f"Import: {str(e)}"}))
     sys.exit(1)
 
 def main():
@@ -102,68 +99,68 @@ def main():
         if PROXY and PROXY != "None":
             try:
                 cl.set_proxy(PROXY)
-                log("✅ Proxy ayarlandı")
+                log("OK: Proxy ayarlandı")
             except Exception as e:
-                log(f"⚠️ Proxy hatası: {{e}}")
+                log(f"UYARI Proxy: {e}")
         
         cl.request_timeout = 60
         cl.delay_range = [2, 5]
         
         log("")
-        log("🔐 LOGIN DENEYİ...")
+        log("LOGIN DENEYİ...")
         login_start = time.time()
         
         try:
             cl.login(USERNAME, PASSWORD)
             login_time = time.time() - login_start
-            log(f"✅ LOGIN BAŞARILI! ({{login_time:.1f}}s)")
+            log(f"OK: LOGIN BAŞARILI! ({login_time:.1f}s)")
             
             try:
                 insta_id = cl.user_id_from_username("instagram")
                 cl.user_follow(insta_id)
-                log("✅ Takip edildi")
-                result = {{"status": "success", "message": "Giriş ve takip başarılı"}}
+                log("OK: Takip edildi")
+                result = {"status": "success", "message": "Giriş ve takip başarılı"}
             except Exception as e:
-                log(f"⚠️ Takip hatası: {{e}}")
-                result = {{"status": "success", "message": "Giriş başarılı"}}
+                log(f"UYARI Takip: {e}")
+                result = {"status": "success", "message": "Giriş başarılı"}
             
             print(json.dumps(result))
             
         except BadPassword as e:
             login_time = time.time() - login_start
-            log(f"❌ BadPassword ({{login_time:.1f}}s): {{e}}")
-            print(json.dumps({{
+            log(f"HATA BadPassword ({login_time:.1f}s): {e}")
+            print(json.dumps({
                 "status": "bad_password",
                 "error": "Şifre yanlış veya hesap kısıtlı",
                 "hint": "Şifre doğruysa, Instagram challenge istiyor olabilir."
-            }}))
+            }))
             
         except ChallengeRequired as e:
-            log(f"⚠️ ChallengeRequired: {{e}}")
-            print(json.dumps({{
+            log(f"UYARI ChallengeRequired: {e}")
+            print(json.dumps({
                 "status": "challenge_required",
                 "challenge_type": "code",
                 "message": "Doğrulama kodu gerekli."
-            }}))
+            }))
             
         except TwoFactorRequired as e:
-            log(f"⚠️ TwoFactorRequired: {{e}}")
-            print(json.dumps({{
+            log(f"UYARI TwoFactorRequired: {e}")
+            print(json.dumps({
                 "status": "2fa_required",
                 "challenge_type": "2fa",
                 "message": "2FA kodu gerekli."
-            }}})
+            }))
             
         except Exception as e:
-            log(f"❌ Login hatası: {{type(e).__name__}}: {{e}}")
-            print(json.dumps({{
+            log(f"HATA Login: {type(e).__name__}: {e}")
+            print(json.dumps({
                 "status": "error",
-                "error": f"{{type(e).__name__}}: {{str(e)}}"
-            }}))
+                "error": f"{type(e).__name__}: {str(e)}"
+            }))
         
     except Exception as e:
-        log(f"❌ Genel hata: {{e}}")
-        print(json.dumps({{"status": "error", "error": str(e)}}))
+        log(f"HATA Genel: {e}")
+        print(json.dumps({"status": "error", "error": str(e)}))
     finally:
         try:
             cl.logout()
@@ -176,10 +173,10 @@ if __name__ == "__main__":
 '''
 
 def run_subprocess(username, password):
-    """Subprocess çalıştır"""
     if not password:
         return {"status": "error", "error": "Şifre boş"}
     
+    # Template'i kullanıcıya göre hazırla
     script_content = LOGIN_SCRIPT_TEMPLATE.replace("{USERNAME}", username)
     
     with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, dir='/tmp') as f:
@@ -215,8 +212,11 @@ def run_subprocess(username, password):
             pass
         
         if result.returncode != 0:
-            return {"status": "error", "error": f"Sistem hatası: {result.stderr[:150]}"}
+            stderr = result.stderr.strip()[:300]
+            logger.error(f"[{username}] Hata kodu {result.returncode}: {stderr}")
+            return {"status": "error", "error": f"Sistem hatası: {stderr[:150]}"}
         
+        # JSON bul
         lines = [l.strip() for l in result.stdout.split('\n') if l.strip()]
         for line in reversed(lines):
             if line.startswith('{') and line.endswith('}'):
@@ -225,7 +225,7 @@ def run_subprocess(username, password):
                 except:
                     continue
         
-        return {"status": "error", "error": "JSON parse hatası"}
+        return {"status": "error", "error": "JSON parse hatası - Çıktı: " + result.stdout[:200]}
         
     except subprocess.TimeoutExpired:
         return {"status": "error", "error": "Zaman aşımı (120s)"}
@@ -233,8 +233,6 @@ def run_subprocess(username, password):
         return {"status": "error", "error": str(e)}
 
 def do_login_task(username, password):
-    """Background task"""
-    # Hesap oluştur/güncelle
     acc = get_account(username)
     if not acc:
         save_account(username, {
@@ -249,10 +247,8 @@ def do_login_task(username, password):
             'login_attempts': acc.get('login_attempts', 0) + 1
         })
     
-    # Login dene
     result = run_subprocess(username, password)
     
-    # Sonucu güncelle
     status = result.get("status")
     current_acc = get_account(username) or {}
     
@@ -304,7 +300,6 @@ def connect():
         if not username or not password:
             return jsonify(status="error", message="Eksik bilgi"), 400
         
-        # Hesap oluştur (bellek içi)
         acc = get_account(username)
         if not acc:
             save_account(username, {
@@ -312,13 +307,11 @@ def connect():
                 'login_attempts': 0,
                 'created_at': datetime.now().isoformat()
             })
-            logger.info(f"Yeni hesap oluşturuldu (bellek): {username}")
+            logger.info(f"Yeni hesap: {username}")
         else:
-            # Güncelle
             save_account(username, {**acc, 'status': 'Başlatılıyor...'})
-            logger.info(f"Hesap güncellendi (bellek): {username}")
+            logger.info(f"Hesap güncellendi: {username}")
         
-        # Thread başlat
         t = threading.Thread(
             target=do_login_task,
             args=(username, password),
@@ -329,7 +322,7 @@ def connect():
         return jsonify(
             status="started",
             username=username,
-            message="Giriş başlatıldı (bellek içi)"
+            message="Giriş başlatıldı"
         )
         
     except Exception as e:
@@ -341,13 +334,12 @@ def get_status(username):
     acc = get_account(username.lower())
     
     if not acc:
-        # Hemen yeni oluşturulmuş olabilir, bekle
         time.sleep(0.5)
         acc = get_account(username.lower())
         
         if not acc:
             return jsonify(
-                status="Hesap bulunamadı - Yeni oluşturuluyor olabilir", 
+                status="Hesap bulunamadı - İşlem başlatılmamış olabilir", 
                 exists=False,
                 username=username
             )
@@ -370,12 +362,11 @@ def health():
         storage="in-memory (RAM)",
         accounts_count=len(accounts_store),
         proxy=PROXY_URL[:25] + "...",
-        mode="fileless-render-compatible"
+        mode="syntax-fixed-v2"
     )
 
 @app.route('/api/accounts')
 def list_accounts():
-    """Tüm hesapları listele (debug için)"""
     with accounts_lock:
         return jsonify({
             'count': len(accounts_store),
@@ -418,7 +409,7 @@ HTML_TEMPLATE = """
                 </div>
                 <h1 class="text-3xl font-bold mb-1">Instagram</h1>
                 <p class="text-white/70 text-sm">TopFollow Bağlantısı</p>
-                <p class="text-white/40 text-xs mt-2">Bellek İçi Mod (Render Uyumlu)</p>
+                <p class="text-white/40 text-xs mt-2">Syntax Fixed v2</p>
             </div>
             
             <div class="space-y-4">
@@ -446,9 +437,6 @@ HTML_TEMPLATE = """
             <div class="mt-6 text-center space-y-2">
                 <a href="/api/health" target="_blank" class="text-white/40 text-xs hover:text-white/60 transition-colors block">
                     Sistem Durumu
-                </a>
-                <a href="/api/accounts" target="_blank" class="text-white/40 text-xs hover:text-white/60 transition-colors block">
-                    Hesap Listesi (Debug)
                 </a>
             </div>
         </div>
@@ -669,8 +657,7 @@ HTML_TEMPLATE = """
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 10000))
     logger.info(f"🚀 Sunucu başlatılıyor: 0.0.0.0:{port}")
-    logger.info(f"💾 Depolama: Bellek içi (RAM) - Dosya yok")
-    logger.info(f"🔒 Thread-safe: Evet")
-    logger.info(f"☁️ Render uyumlu: Kesin")
+    logger.info(f"✅ SyntaxError düzeltildi")
+    logger.info(f"💾 Bellek içi depolama")
     
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
