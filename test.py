@@ -6,13 +6,14 @@ import logging
 import traceback
 import subprocess
 import tempfile
+import shlex
 from flask import Flask, request, jsonify, render_template_string
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash
 from dotenv import load_dotenv
 
 logging.basicConfig(
-    level=logging.DEBUG,  # DEBUG seviyesine çekildi
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)]
 )
@@ -30,7 +31,7 @@ app.config['SECRET_KEY'] = os.getenv("SECRET_KEY", "secret-key-123")
 
 db = SQLAlchemy(app)
 
-# PROXY - SİZİN PROXY'NİZ
+# PROXY
 PROXY_URL = "http://SDDLzRveLbkavJr:MPvdO65MOnMifL7@82.41.250.136:42158"
 logger.info(f"Proxy: {PROXY_URL[:30]}...")
 
@@ -42,25 +43,46 @@ class IGAccount(db.Model):
     status = db.Column(db.String(200), default="Beklemede")
     last_login = db.Column(db.DateTime)
     login_attempts = db.Column(db.Integer, default=0)
+    challenge_type = db.Column(db.String(50))
+    challenge_pending = db.Column(db.Boolean, default=False)
+    challenge_method = db.Column(db.String(50))
+    raw_error = db.Column(db.Text)  # Ham hata mesajı
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
 
-# Geliştirilmiş login script - DETAYLI LOG
-LOGIN_SCRIPT = '''
+# Geliştirilmiş login script - ŞİFRE DOĞRULAMA ve DETAYLI LOG
+LOGIN_SCRIPT_TEMPLATE = '''
 import sys
 import json
 import time
-import traceback
+import os
 
-# Log dosyası
-log_file = open("/tmp/ig_login_debug.log", "w")
+# Şifre doğrudan sys.argv'dan alınacak - escape yok!
+USERNAME = sys.argv[1]
+PASSWORD = sys.argv[2]  # Ham şifre - hiçbir işlem yapılmadı
+PROXY = sys.argv[3] if len(sys.argv) > 3 else None
+
+log_file = open(f"/tmp/ig_debug_{{USERNAME}}.log", "w", buffering=1)
 def log(msg):
-    log_file.write(f"{time.strftime('%H:%M:%S')} - {msg}\\n")
+    timestamp = time.strftime('%H:%M:%S')
+    line = f"{{timestamp}} - {{msg}}"
+    log_file.write(line + "\\\\n")
     log_file.flush()
-    print(f"DEBUG: {msg}", file=sys.stderr)
+    print(line, file=sys.stderr)
 
-log("Script başladı")
+log("="*50)
+log(f"KULLANICI: {{USERNAME}}")
+log(f"ŞİFRE (ilk 3 karakter): {{PASSWORD[:3]}}***")  # Güvenlik için kısalt
+log(f"ŞİFRE UZUNLUK: {{len(PASSWORD)}}")
+log(f"PROXY: {{PROXY[:30] if PROXY else 'Yok'}}...")
+log("="*50)
+
+# Şifre kontrolü - boş mu?
+if not PASSWORD:
+    log("❌ ŞİFRE BOŞ!")
+    print(json.dumps({{"status": "error", "error": "Şifre boş"}}))
+    sys.exit(1)
 
 try:
     from instagrapi import Client
@@ -69,86 +91,138 @@ try:
         LoginRequired, 
         PleaseWaitFewMinutes,
         BadPassword,
-        TwoFactorRequired
+        TwoFactorRequired,
+        ClientError
     )
-    log("instagrapi import edildi")
+    log("✅ instagrapi import edildi")
 except Exception as e:
-    log(f"Import hatası: {e}")
-    print(json.dumps({"success": False, "error": f"Import: {str(e)}"}))
+    log(f"❌ Import hatası: {{e}}")
+    print(json.dumps({{"status": "error", "error": f"Import: {{str(e)}}"}}))
     sys.exit(1)
 
 def main():
-    username = sys.argv[1]
-    password = sys.argv[2]
-    proxy = sys.argv[3] if len(sys.argv) > 3 else None
-    
-    log(f"Kullanıcı: {username}, Proxy: {proxy[:20] if proxy else 'Yok'}...")
-    
     try:
         log("Client oluşturuluyor...")
         cl = Client()
-        log("Client oluşturuldu")
+        log("✅ Client oluşturuldu")
         
-        # Proxy ayarla
-        if proxy and proxy != "None":
+        # Proxy
+        if PROXY and PROXY != "None":
             try:
-                log(f"Proxy ayarlanıyor: {proxy[:30]}...")
-                cl.set_proxy(proxy)
-                log("Proxy ayarlandı")
+                log(f"Proxy ayarlanıyor...")
+                cl.set_proxy(PROXY)
+                log("✅ Proxy ayarlandı")
             except Exception as e:
-                log(f"Proxy hatası: {e}")
-                print(json.dumps({"success": False, "error": f"Proxy: {str(e)}"}))
-                return
+                log(f"⚠️ Proxy hatası: {{e}}")
+                # Proxy'siz devam et
         
-        # Timeout ve delay
-        cl.request_timeout = 45  # 45 saniye
-        cl.delay_range = [2, 4]
-        log(f"Timeout: {cl.request_timeout}s")
+        # Timeout
+        cl.request_timeout = 60  # 60 saniye
+        cl.delay_range = [2, 5]
+        log(f"Timeout: {{cl.request_timeout}}s")
         
-        # LOGIN - en kritik kısım
-        log("LOGIN çağrılıyor...")
-        start_time = time.time()
+        # LOGIN
+        log("")
+        log("🔐 LOGIN DENEYİ...")
+        log(f"Username: {{USERNAME}}")
+        log(f"Password: {{PASSWORD[:3]}}*** ({{len(PASSWORD)}} karakter)")
+        log("")
+        
+        login_start = time.time()
         
         try:
-            cl.login(username, password)
-            elapsed = time.time() - start_time
-            log(f"Login BAŞARILI! ({elapsed:.1f}s)")
-        except Exception as login_err:
-            elapsed = time.time() - start_time
-            log(f"Login HATASI ({elapsed:.1f}s): {type(login_err).__name__}: {login_err}")
-            raise
-        
-        # Takip et
-        try:
-            log("Instagram ID alınıyor...")
-            insta_id = cl.user_id_from_username("instagram")
-            log(f"ID: {insta_id}, Takip ediliyor...")
-            cl.user_follow(insta_id)
-            log("Takip edildi")
-            result = {"success": True, "message": "Giriş ve takip başarılı"}
+            # GERÇEK LOGIN
+            cl.login(USERNAME, PASSWORD)
+            
+            login_time = time.time() - login_start
+            log(f"✅ LOGIN BAŞARILI! ({{login_time:.1f}}s)")
+            
+            # Takip et
+            try:
+                log("Instagram takip ediliyor...")
+                insta_id = cl.user_id_from_username("instagram")
+                cl.user_follow(insta_id)
+                log("✅ Takip edildi")
+                result = {{"status": "success", "message": "Giriş ve takip başarılı"}}
+            except Exception as e:
+                log(f"⚠️ Takip hatası: {{e}}")
+                result = {{"status": "success", "message": f"Giriş başarılı, takip: {{str(e)}}"}}
+            
+            print(json.dumps(result))
+            log("="*50)
+            log("İŞLEM TAMAM")
+            
+        except BadPassword as e:
+            login_time = time.time() - login_start
+            log(f"❌ BadPassword HATASI ({{login_time:.1f}}s)")
+            log(f"Hata detayı: {{e}}")
+            log(f"Hata tipi: {{type(e).__name__}}")
+            # ÖNEMLİ: BadPassword aslında challenge olabilir!
+            # instagrapi bazen yanlış şifre yerine challenge döner
+            print(json.dumps({{
+                "status": "bad_password",
+                "error": "Şifre yanlış veya hesap kısıtlı",
+                "detail": str(e),
+                "hint": "Eğer şifre doğruysa, Instagram challenge istiyor olabilir. 2-3 dakika bekleyip tekrar deneyin."
+            }}))
+            
+        except ChallengeRequired as e:
+            login_time = time.time() - login_start
+            log(f"⚠️ ChallengeRequired ({{login_time:.1f}}s)")
+            log(f"Challenge detay: {{e}}")
+            print(json.dumps({{
+                "status": "challenge_required",
+                "challenge_type": "code",
+                "message": "Doğrulama kodu gerekli. Instagram uygulamasını kontrol edin."
+            }}))
+            
+        except TwoFactorRequired as e:
+            login_time = time.time() - login_start
+            log(f"⚠️ TwoFactorRequired ({{login_time:.1f}}s)")
+            print(json.dumps({{
+                "status": "2fa_required",
+                "challenge_type": "2fa",
+                "message": "İki faktörlü doğrulama kodu gerekli."
+            }}))
+            
+        except ClientError as e:
+            login_time = time.time() - login_start
+            log(f"❌ ClientError ({{login_time:.1f}}s): {{e}}")
+            # ClientError kodunu kontrol et
+            error_str = str(e).lower()
+            if "password" in error_str:
+                print(json.dumps({{
+                    "status": "error",
+                    "error": "Şifre hatası",
+                    "detail": str(e)
+                }}))
+            elif "checkpoint" in error_str or "challenge" in error_str:
+                print(json.dumps({{
+                    "status": "challenge_required",
+                    "challenge_type": "checkpoint",
+                    "message": "Hesap doğrulaması gerekli."
+                }}))
+            else:
+                print(json.dumps({{
+                    "status": "error",
+                    "error": f"ClientError: {{str(e)}}"
+                }}))
+                
         except Exception as e:
-            log(f"Takip hatası: {e}")
-            result = {"success": True, "message": f"Giriş başarılı, takip: {str(e)}"}
+            login_time = time.time() - login_start
+            log(f"❌ BEKLENMEYEN HATA ({{login_time:.1f}}s)")
+            log(f"Hata tipi: {{type(e).__name__}}")
+            log(f"Hata mesajı: {{e}}")
+            import traceback
+            log(f"Traceback: {{traceback.format_exc()}}")
+            print(json.dumps({{
+                "status": "error",
+                "error": f"{{type(e).__name__}}: {{str(e)}}"
+            }}))
         
-        print(json.dumps(result))
-        log("İşlem tamam")
-        
-    except ChallengeRequired as e:
-        log(f"Challenge: {e}")
-        print(json.dumps({"success": False, "error": "ONAY GEREKİYOR", "detail": str(e)}))
-    except TwoFactorRequired as e:
-        log(f"2FA: {e}")
-        print(json.dumps({"success": False, "error": "2FA GEREKİYOR"}))
-    except BadPassword as e:
-        log(f"BadPassword: {e}")
-        print(json.dumps({"success": False, "error": "Yanlış şifre"}))
-    except PleaseWaitFewMinutes as e:
-        log(f"RateLimit: {e}")
-        print(json.dumps({"success": False, "error": "Rate limit - 10dk bekle"}))
-    except Exception as e:
-        log(f"Beklenmeyen hata: {type(e).__name__}: {e}")
-        log(traceback.format_exc())
-        print(json.dumps({"success": False, "error": f"{type(e).__name__}: {str(e)}"}))
+    except Exception as outer_e:
+        log(f"❌ DIŞ HATA: {{outer_e}}")
+        print(json.dumps({{"status": "error", "error": f"Dış hata: {{str(outer_e)}}"}}))
     finally:
         try:
             cl.logout()
@@ -161,27 +235,47 @@ if __name__ == "__main__":
     main()
 '''
 
-def run_instagrapi_subprocess(username, password):
+def run_subprocess(username, password):
     """
-    Subprocess ile login - 120 saniye timeout
+    Subprocess çalıştır - şifre doğrudan iletilir
     """
+    # Şifrede özel karakter kontrolü
+    if not password:
+        return {"status": "error", "error": "Şifre boş"}
+    
+    # Template'i kullanıcı adına göre hazırla
+    script_content = LOGIN_SCRIPT_TEMPLATE.replace("{USERNAME}", username)
+    
     with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, dir='/tmp') as f:
-        f.write(LOGIN_SCRIPT)
+        f.write(script_content)
         script_path = f.name
     
-    logger.info(f"[{username}] Subprocess başlatılıyor (timeout: 120s)...")
+    # Şifreyi güvenli şekilde ilet - shlex.quote kullan
+    # Ama asıl çözüm: şifreyi base64 ile encode edip decode etmek!
+    import base64
+    encoded_password = base64.b64encode(password.encode()).decode()
+    
+    logger.info(f"[{username}] Subprocess başlatılıyor...")
+    logger.info(f"[{username}] Şifre uzunluk: {len(password)}")
+    logger.info(f"[{username}] Şifre (ilk 3): {password[:3]}***")
+    
     start_time = time.time()
     
     try:
-        # Python'u unbuffered modda çalıştır
         env = os.environ.copy()
         env['PYTHONUNBUFFERED'] = '1'
         
+        # Şifreyi base64 olarak gönder, script içinde decode et
         result = subprocess.run(
-            [sys.executable, '-u', script_path, username, password, PROXY_URL],
+            [
+                sys.executable, '-u', script_path,
+                username,
+                password,  # Doğrudan şifre - base64 yerine deneyelim önce
+                PROXY_URL if PROXY_URL else "None"
+            ],
             capture_output=True,
             text=True,
-            timeout=120,  # 120 saniye
+            timeout=120,
             cwd='/tmp',
             env=env
         )
@@ -195,95 +289,102 @@ def run_instagrapi_subprocess(username, password):
         except:
             pass
         
-        # Log dosyasını oku (debug için)
+        # Log dosyasını oku
+        log_file = f"/tmp/ig_debug_{username}.log"
         try:
-            with open("/tmp/ig_login_debug.log", "r") as f:
-                debug_logs = f.read()
-                logger.debug(f"[{username}] Debug logs:\n{debug_logs}")
-        except:
-            pass
+            with open(log_file, "r") as f:
+                logs = f.read()
+                logger.info(f"[{username}] DETAYLI LOG:\n{logs}")
+        except Exception as e:
+            logger.warning(f"[{username}] Log okunamadı: {e}")
         
         # Sonucu parse et
         if result.returncode != 0:
-            stderr = result.stderr.strip() if result.stderr else "Boş stderr"
-            logger.error(f"[{username}] Subprocess hata kodu {result.returncode}: {stderr[:200]}")
-            return False, f"Sistem hatası (kod {result.returncode}): {stderr[:150]}"
+            stderr = result.stderr.strip()[:300]
+            logger.error(f"[{username}] Hata kodu {result.returncode}: {stderr}")
+            return {
+                "status": "error", 
+                "error": f"Sistem hatası (kod {result.returncode}): {stderr[:150]}"
+            }
         
-        # Son satırı bul (JSON)
+        # JSON bul
         lines = [l.strip() for l in result.stdout.split('\n') if l.strip()]
-        json_line = None
-        
         for line in reversed(lines):
             if line.startswith('{') and line.endswith('}'):
                 try:
-                    json.loads(line)  # Valid JSON mı test et
-                    json_line = line
-                    break
+                    return json.loads(line)
                 except:
                     continue
         
-        if not json_line:
-            logger.error(f"[{username}] JSON bulunamadı. Çıktı: {result.stdout[:300]}")
-            return False, "JSON parse hatası"
+        return {"status": "error", "error": "JSON parse hatası - Çıktı: " + result.stdout[:200]}
         
-        data = json.loads(json_line)
-        logger.info(f"[{username}] Sonuç: {data}")
-        
-        if data.get('success'):
-            return True, data.get('message', 'Başarılı')
-        else:
-            error = data.get('error', 'Bilinmeyen hata')
-            detail = data.get('detail', '')
-            full_error = f"{error}" + (f" ({detail})" if detail else "")
-            return False, full_error
-            
     except subprocess.TimeoutExpired:
-        elapsed = time.time() - start_time
-        logger.error(f"[{username}] TIMEOUT ({elapsed:.1f}s)")
-        try:
-            os.unlink(script_path)
-        except:
-            pass
-        return False, f"Zaman aşımı (120s) - Proxy çok yavaş veya Instagram engelledi"
+        logger.error(f"[{username}] TIMEOUT")
+        return {"status": "error", "error": "Zaman aşımı (120s) - Instagram yanıt vermiyor"}
     except Exception as e:
-        logger.error(f"[{username}] Subprocess exception: {e}")
-        try:
-            os.unlink(script_path)
-        except:
-            pass
-        return False, str(e)
+        logger.error(f"[{username}] Exception: {e}")
+        return {"status": "error", "error": str(e)}
 
 def do_login_task(username, password):
+    """
+    Background login task
+    """
     with app.app_context():
-        # Database güncelle
+        # Başlangıç
         try:
             with db.session.begin():
                 acc = IGAccount.query.filter_by(username=username).first()
                 if acc:
                     acc.login_attempts += 1
-                    acc.status = "Giriş deneniyor (subprocess)..."
+                    acc.status = "Giriş deneniyor..."
+                    acc.raw_error = None
         except Exception as e:
             logger.error(f"[{username}] DB hatası: {e}")
             return
         
         # Login dene
-        success, message = run_instagrapi_subprocess(username, password)
+        result = run_subprocess(username, password)
         
-        # Sonuç güncelle
+        # Sonucu işle
         try:
             with db.session.begin():
                 acc = IGAccount.query.filter_by(username=username).first()
-                if acc:
-                    if success:
-                        acc.status = "AKTİF ✅ - " + message
-                        acc.last_login = db.func.now()
-                    else:
-                        if "ONAY" in message or "2FA" in message:
-                            acc.status = message + " ⚠️"
-                        elif "timeout" in message.lower() or "aşımı" in message:
-                            acc.status = "HATA ❌ - " + message + " (Proxy kontrol edin)"
-                        else:
-                            acc.status = "HATA ❌ - " + message
+                if not acc:
+                    return
+                
+                status = result.get("status")
+                error_msg = result.get("error", "")
+                detail = result.get("detail", "")
+                hint = result.get("hint", "")
+                
+                # Ham hatayı kaydet
+                acc.raw_error = json.dumps(result)
+                
+                if status == "success":
+                    acc.status = "AKTİF ✅ - " + result.get("message", "Başarılı")
+                    acc.last_login = db.func.now()
+                    acc.challenge_pending = False
+                    
+                elif status == "challenge_required":
+                    acc.status = "🔐 DOĞRULAMA KODU GEREKLİ"
+                    acc.challenge_type = result.get("challenge_type", "code")
+                    acc.challenge_pending = True
+                    
+                elif status == "2fa_required":
+                    acc.status = "🔐 2FA KODU GEREKLİ"
+                    acc.challenge_type = "2fa"
+                    acc.challenge_pending = True
+                    
+                elif status == "bad_password":
+                    # Şifre yanlış ama aslında challenge olabilir!
+                    full_msg = error_msg
+                    if hint:
+                        full_msg += f" | {hint}"
+                    acc.status = "⚠️ " + full_msg
+                    
+                else:
+                    acc.status = "HATA ❌ - " + error_msg[:80]
+                    
         except Exception as e:
             logger.error(f"[{username}] DB update hatası: {e}")
 
@@ -293,8 +394,6 @@ def index():
 
 @app.route('/api/connect', methods=['POST'])
 def connect():
-    logger.info("Connect isteği alındı")
-    
     try:
         data = request.get_json()
         username = data.get('u', '').strip().lower()
@@ -302,6 +401,12 @@ def connect():
         
         if not username or not password:
             return jsonify(status="error", message="Eksik bilgi"), 400
+        
+        # Şifre kontrolü
+        if len(password) < 3:
+            return jsonify(status="error", message="Şifre çok kısa"), 400
+        
+        logger.info(f"Giriş denemesi: {username}, şifre uzunluk: {len(password)}")
         
         # Database kaydı
         try:
@@ -327,12 +432,10 @@ def connect():
         )
         t.start()
         
-        logger.info(f"Thread başlatıldı: {username}")
-        
         return jsonify(
             status="started",
             username=username,
-            message="İşlem başlatıldı (120s timeout)"
+            message="Giriş başlatıldı (şifre kontrol edilecek)"
         )
         
     except Exception as e:
@@ -350,7 +453,10 @@ def get_status(username):
             status=acc.status,
             exists=True,
             attempts=acc.login_attempts,
-            last_login=acc.last_login.isoformat() if acc.last_login else None
+            last_login=acc.last_login.isoformat() if acc.last_login else None,
+            challenge_pending=acc.challenge_pending,
+            challenge_type=acc.challenge_type,
+            raw_error=acc.raw_error[:200] if acc.raw_error else None
         )
     except Exception as e:
         return jsonify(status="Hata", error=str(e)), 500
@@ -360,28 +466,8 @@ def health():
     return jsonify(
         status="ok",
         proxy=PROXY_URL[:25] + "...",
-        mode="subprocess-instagrapi-v2",
-        timeout="120s"
+        mode="password-debug-v2"
     )
-
-@app.route('/api/test-proxy')
-def test_proxy():
-    """Proxy test endpoint"""
-    try:
-        import requests
-        proxies = {'http': PROXY_URL, 'https': PROXY_URL}
-        resp = requests.get('http://httpbin.org/ip', proxies=proxies, timeout=10)
-        return jsonify(
-            proxy_working=True,
-            response=resp.json(),
-            proxy=PROXY_URL[:30] + "..."
-        )
-    except Exception as e:
-        return jsonify(
-            proxy_working=False,
-            error=str(e),
-            proxy=PROXY_URL[:30] + "..."
-        )
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -394,10 +480,13 @@ HTML_TEMPLATE = """
     <style>
         .page { display: none; }
         .active { display: flex; }
+        .hidden { display: none !important; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
         .animate-fade-in { animation: fadeIn 0.4s ease-out; }
         .loader { border: 3px solid rgba(255,255,255,0.3); border-top: 3px solid white; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; display: inline-block; vertical-align: middle; margin-right: 8px; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .shake { animation: shake 0.5s; }
+        @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
     </style>
 </head>
 <body class="bg-gradient-to-br from-purple-600 via-purple-500 to-blue-500 min-h-screen font-sans text-white">
@@ -436,9 +525,10 @@ HTML_TEMPLATE = """
             <div id="errorBox" class="hidden mt-6 p-4 bg-red-500/30 border border-red-400/50 rounded-xl text-center text-sm backdrop-blur-sm"></div>
             
             <div class="mt-8 text-center">
-                <button onclick="testProxy()" class="text-white/50 text-xs hover:text-white/80 transition-colors">
-                    Proxy Test Et
-                </button>
+                <p class="text-white/50 text-xs">
+                    Proxy üzerinden güvenli bağlantı<br>
+                    (Şifre doğrulama aktif)
+                </p>
             </div>
         </div>
     </div>
@@ -452,8 +542,10 @@ HTML_TEMPLATE = """
                 </div>
                 
                 <h2 id="msg" class="text-xl font-bold text-gray-800 mb-2">Bağlanıyor...</h2>
-                <p id="subMsg" class="text-gray-500 text-sm">Proxy üzerinden giriş yapılıyor</p>
-                <p class="text-xs text-gray-400 mt-2">(Max 120 saniye)</p>
+                <p id="subMsg" class="text-gray-500 text-sm">İşlem devam ediyor</p>
+                
+                <!-- Ham Hata Detayı (Gizli, tooltip olarak gösterilebilir) -->
+                <div id="rawError" class="hidden mt-3 p-2 bg-gray-100 rounded text-xs text-left font-mono break-all max-h-20 overflow-y-auto"></div>
             </div>
 
             <div class="bg-white rounded-2xl shadow-md p-5 mb-4">
@@ -469,7 +561,12 @@ HTML_TEMPLATE = """
 
             <button onclick="checkNow()" id="checkBtn"
                     class="w-full bg-purple-600 text-white p-4 rounded-xl font-bold mb-3 hover:bg-purple-700 transition-all active:scale-[0.98] shadow-lg">
-                Kontrol Et
+                Durumu Kontrol Et
+            </button>
+            
+            <button onclick="toggleRawError()" id="debugBtn"
+                    class="w-full bg-gray-200 text-gray-600 p-3 rounded-xl font-semibold text-sm mb-3 hover:bg-gray-300 transition-all">
+                🔍 Teknik Detaylar
             </button>
             
             <button onclick="location.reload()" 
@@ -485,13 +582,17 @@ HTML_TEMPLATE = """
 
     <script>
         let currentUser = "";
+        let currentPassword = "";
         let checkInterval = null;
         let countdown = 5;
+        let lastRawError = "";
 
         function showError(msg) {
             const box = document.getElementById('errorBox');
             box.textContent = msg;
             box.classList.remove('hidden');
+            box.classList.add('shake');
+            setTimeout(() => box.classList.remove('shake'), 500);
             
             const btn = document.getElementById('btn');
             btn.disabled = false;
@@ -499,14 +600,9 @@ HTML_TEMPLATE = """
             document.getElementById('btnLoader').classList.add('hidden');
         }
 
-        async function testProxy() {
-            try {
-                const res = await fetch('/api/test-proxy');
-                const data = await res.json();
-                alert(data.proxy_working ? 'Proxy ÇALIŞIYOR!' : 'Proxy HATASI: ' + data.error);
-            } catch (e) {
-                alert('Test hatası: ' + e);
-            }
+        function toggleRawError() {
+            const div = document.getElementById('rawError');
+            div.classList.toggle('hidden');
         }
 
         async function giris() {
@@ -517,6 +613,9 @@ HTML_TEMPLATE = """
                 showError('Kullanıcı adı ve şifre girin');
                 return;
             }
+
+            currentUser = u;
+            currentPassword = p;
 
             const btn = document.getElementById('btn');
             btn.disabled = true;
@@ -542,7 +641,7 @@ HTML_TEMPLATE = """
                     throw new Error(data.message || 'Sunucu hatası');
                 }
 
-                currentUser = u;
+                // Başarılı - status sayfasına geç
                 document.getElementById('p1').classList.add('hidden');
                 document.getElementById('p1').classList.remove('active');
                 document.getElementById('p2').classList.remove('hidden');
@@ -557,6 +656,10 @@ HTML_TEMPLATE = """
                 } else {
                     showError(err.message);
                 }
+                
+                btn.disabled = false;
+                document.getElementById('btnText').classList.remove('hidden');
+                document.getElementById('btnLoader').classList.add('hidden');
             }
         }
 
@@ -602,8 +705,15 @@ HTML_TEMPLATE = """
                 const iconEl = document.getElementById('statusIcon');
                 const badge = document.getElementById('statusBadge');
                 const subMsg = document.getElementById('subMsg');
+                const rawErrorDiv = document.getElementById('rawError');
                 
                 msgEl.textContent = data.status || 'Bekleniyor...';
+                
+                // Ham hatayı kaydet ve göster
+                if (data.raw_error) {
+                    lastRawError = data.raw_error;
+                    rawErrorDiv.textContent = data.raw_error;
+                }
                 
                 if (data.status.includes('✅')) {
                     badge.className = 'bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-bold';
@@ -611,16 +721,20 @@ HTML_TEMPLATE = """
                     iconEl.className = 'w-4 h-4 bg-green-500 rounded-full';
                     subMsg.textContent = 'Başarıyla bağlandı!';
                     clearInterval(checkInterval);
+                } else if (data.status.includes('⚠️') || data.status.includes('Şifre')) {
+                    badge.className = 'bg-orange-100 text-orange-700 px-3 py-1 rounded-full text-xs font-bold';
+                    badge.textContent = 'Şüpheli';
+                    iconEl.className = 'w-4 h-4 bg-orange-500 rounded-full animate-pulse';
+                    subMsg.textContent = 'Şifre doğru olabilir ama Instagram ek doğrulama istiyor';
                 } else if (data.status.includes('❌')) {
                     badge.className = 'bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs font-bold';
                     badge.textContent = 'Hata';
                     iconEl.className = 'w-4 h-4 bg-red-500 rounded-full';
                     subMsg.textContent = 'Bir sorun oluştu';
-                } else if (data.status.includes('⚠️')) {
-                    badge.className = 'bg-orange-100 text-orange-700 px-3 py-1 rounded-full text-xs font-bold';
-                    badge.textContent = 'Onay Gerekli';
-                    iconEl.className = 'w-4 h-4 bg-orange-500 rounded-full animate-bounce';
-                    subMsg.textContent = 'Instagram uygulamasını kontrol edin';
+                } else if (data.status.includes('🔐')) {
+                    badge.className = 'bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs font-bold';
+                    badge.textContent = 'Doğrulama';
+                    iconEl.className = 'w-4 h-4 bg-yellow-500 rounded-full animate-bounce';
                 }
 
             } catch (e) {
@@ -643,6 +757,6 @@ if __name__ == "__main__":
     
     port = int(os.getenv("PORT", 10000))
     logger.info(f"Sunucu: 0.0.0.0:{port}")
-    logger.info("Mode: Subprocess + 120s timeout + detaylı log")
+    logger.info("Mode: Password verification + detailed debug")
     
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
