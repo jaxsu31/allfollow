@@ -95,23 +95,88 @@ except Exception as e:
     log(f"❌ Import HATASI: {e}")
     print(json.dumps({"status": "error", "error": f"Import hatası: {e}"}), flush=True)
     sys.exit(1)
+
+# CLIENT OLUŞTUR
+log("🔧 Client oluşturuluyor...")
+client = Client()
+
+# PROXY AYARLA
+if PROXY and PROXY.strip():
+    log(f"🌐 Proxy ayarlanıyor: {PROXY[:30]}...")
+    try:
+        client.set_proxy(PROXY)
+        log("✅ Proxy ayarlandı")
+    except Exception as e:
+        log(f"⚠️ Proxy hatası: {e}")
+
+# GİRİŞ YAP
+log("🔐 Giriş yapılıyor...")
+try:
+    client.login(USERNAME, PASSWORD)
+    log("✅ Giriş BAŞARILI!")
+    
+    # Session bilgilerini al
+    session_id = client.sessionid
+    user_id = client.user_id
+    
+    result = {
+        "status": "success",
+        "message": "Giriş başarılı",
+        "username": USERNAME,
+        "user_id": user_id,
+        "session_id": session_id,
+        "has_challenge": False
+    }
+    
+    print(json.dumps(result), flush=True)
+    log_f.close()
+    sys.exit(0)
+    
+except BadPassword:
+    log("❌ HATALI ŞİFRE")
+    print(json.dumps({"status": "error", "error": "Hatalı şifre"}), flush=True)
+    log_f.close()
+    sys.exit(1)
+    
+except ChallengeRequired as e:
+    log("⚠️ CHALLENGE GEREKLİ")
+    print(json.dumps({
+        "status": "challenge_required",
+        "error": "Doğrulama gerekli",
+        "challenge_type": "unknown",
+        "raw": str(e)
+    }), flush=True)
+    log_f.close()
+    sys.exit(1)
+    
+except TwoFactorRequired:
+    log("⚠️ 2FA GEREKLİ")
+    print(json.dumps({
+        "status": "2fa_required",
+        "error": "İki faktörlü doğrulama gerekli"
+    }), flush=True)
+    log_f.close()
+    sys.exit(1)
+    
+except PleaseWaitFewMinutes as e:
+    log("⏰ RATE LIMIT - BEKLEME GEREKLİ")
+    print(json.dumps({
+        "status": "rate_limit",
+        "error": "Birkaç dakika bekleyin",
+        "raw": str(e)
+    }), flush=True)
+    log_f.close()
+    sys.exit(1)
+    
+except Exception as e:
+    log(f"❌ BEKLENMEYEN HATA: {str(e)}")
+    print(json.dumps({
+        "status": "error",
+        "error": str(e)
+    }), flush=True)
+    log_f.close()
+    sys.exit(1)
 '''
-
-# === EKLENDİ: Flask route'ları olmalı ===
-
-@app.route('/')
-def index():
-    return jsonify({"status": "OK", "message": "Instagram Smart Login API çalışıyor"})
-
-@app.route('/health')
-def health():
-    return jsonify({
-        "status": "healthy", 
-        "accounts_count": len(accounts_store),
-        "proxy_configured": bool(PROXY_URL)
-    })
-
-# === EKLENDİ: Render için kritik satırlar ===
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
