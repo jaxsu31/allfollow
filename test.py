@@ -12,7 +12,7 @@ from flask import Flask, request, jsonify, render_template_string
 from dotenv import load_dotenv
 
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)]
 )
@@ -45,26 +45,19 @@ def save_account(username, data):
             'last_login': data.get('last_login'),
             'challenge_pending': data.get('challenge_pending', False),
             'challenge_type': data.get('challenge_type'),
-            'challenge_method': data.get('challenge_method', 'email'),  # email veya sms
-            'checkpoint_url': data.get('checkpoint_url'),
             'raw_error': data.get('raw_error'),
             'created_at': data.get('created_at', datetime.now().isoformat())
         }
 
-# CHALLENGE DESTEKLİ LOGIN SCRIPT
+# DÜZELTİLMİŞ SCRIPT - stdout'a SADECE JSON yazılır!
 LOGIN_SCRIPT = r'''
 import sys
 import json
 import time
 import os
 
-USERNAME = sys.argv[1] if len(sys.argv) > 1 else ""
-PASSWORD = sys.argv[2] if len(sys.argv) > 2 else ""
-PROXY = sys.argv[3] if len(sys.argv) > 3 else None
-ACTION = sys.argv[4] if len(sys.argv) > 4 else "login"  # login veya challenge
-CODE = sys.argv[5] if len(sys.argv) > 5 else None  # challenge kodu
-
-LOG_FILE = f"/tmp/ig_challenge_{USERNAME}.log"
+# Log dosyası - ayrı tut
+LOG_FILE = f"/tmp/ig_fixed_{sys.argv[1] if len(sys.argv) > 1 else 'unknown'}.log"
 log_f = open(LOG_FILE, "w", buffering=1)
 
 def log(msg):
@@ -72,221 +65,151 @@ def log(msg):
     line = f"{timestamp} | {msg}"
     log_f.write(line + "\n")
     log_f.flush()
-    print(line, file=sys.stderr)
+    # SADECE dosyaya yaz, stderr'e değil! (stdout karışmasın)
 
-log("=" * 60)
-log(f"🚀 SCRIPT BAŞLADI | Action: {ACTION}")
-log(f"👤 Username: {USERNAME}")
-log(f"🔑 Password: {'*' * len(PASSWORD)} ({len(PASSWORD)} chars)")
-log(f"🌐 Proxy: {PROXY[:25] + '...' if PROXY else 'YOK'}")
-log(f"📝 Code: {CODE if CODE else 'YOK'}")
-log("=" * 60)
+# BAŞLANGIÇ
+USERNAME = sys.argv[1] if len(sys.argv) > 1 else ""
+PASSWORD = sys.argv[2] if len(sys.argv) > 2 else ""
+PROXY = sys.argv[3] if len(sys.argv) > 3 else None
+
+log("=" * 50)
+log(f"SCRIPT BAŞLADI")
+log(f"Username: {USERNAME}")
+log(f"Password: {'*' * len(PASSWORD)} ({len(PASSWORD)} chars)")
+log(f"Proxy: {PROXY[:20] + '...' if PROXY else 'YOK'}")
+
+if not PASSWORD:
+    log("HATA: Şifre boş!")
+    # SADECE stdout'a JSON yaz
+    print(json.dumps({"status": "error", "error": "Şifre boş"}), flush=True)
+    sys.exit(1)
 
 # INSTAGRAPI IMPORT
-log("📦 instagrapi import...")
+log("Import başlıyor...")
 try:
     from instagrapi import Client
     from instagrapi.exceptions import (
         ChallengeRequired, LoginRequired, 
         PleaseWaitFewMinutes, BadPassword,
-        TwoFactorRequired, ClientError,
-        ChallengeError
+        TwoFactorRequired, ClientError
     )
-    from instagrapi.mixins.challenge import ChallengeChoice
-    log("✅ instagrapi import OK")
+    log("Import OK")
 except Exception as e:
-    log(f"❌ Import HATASI: {e}")
-    print(json.dumps({"status": "error", "error": f"Import: {str(e)}"}))
+    log(f"Import HATASI: {e}")
+    print(json.dumps({"status": "error", "error": f"Import: {str(e)}"}), flush=True)
     sys.exit(1)
 
-# GLOBAL CLIENT (challenge için gerekli)
-cl = None
-
-def get_client():
-    global cl
-    if cl is None:
+# ANA İŞLEM
+def main():
+    try:
+        log("Client oluşturuluyor...")
         cl = Client()
+        
         if PROXY and PROXY != "None":
             try:
                 cl.set_proxy(PROXY)
-                log("✅ Proxy ayarlandı")
+                log("Proxy OK")
             except Exception as e:
-                log(f"⚠️ Proxy hatası: {e}")
+                log(f"Proxy hatası: {e}")
+        
         cl.request_timeout = 60
         cl.delay_range = [2, 5]
-    return cl
-
-def main():
-    global cl
-    
-    try:
-        # CHALLENGE CEVABI
-        if ACTION == "challenge" and CODE:
-            log(f"🔐 Challenge cevabı gönderiliyor: {CODE}")
-            
-            # Önceki session'ı dene yükle
-            session_file = f"/tmp/ig_session_{USERNAME}.json"
-            try:
-                if os.path.exists(session_file):
-                    with open(session_file, 'r') as f:
-                        settings = json.load(f)
-                        cl = get_client()
-                        cl.set_settings(settings)
-                        log("✅ Önceki session yüklendi")
-            except Exception as e:
-                log(f"⚠️ Session yükleme hatası: {e}")
-            
-            try:
-                # Challenge cevabı gönder
-                if hasattr(cl, 'challenge_code'):
-                    cl.challenge_code(CODE)
-                else:
-                    # Alternatif yöntem
-                    cl.set_settings({"challenge_code": CODE})
-                
-                log("✅✅✅ Challenge BAŞARILI! ✅✅✅")
-                print(json.dumps({
-                    "status": "success",
-                    "message": "Doğrulama başarılı! Giriş tamamlandı."
-                }))
-                
-                # Takip et
-                try:
-                    insta_id = cl.user_id_from_username("instagram")
-                    cl.user_follow(insta_id)
-                    log("✅ Takip edildi")
-                except Exception as e:
-                    log(f"⚠️ Takip hatası: {e}")
-                    
-            except Exception as e:
-                log(f"❌ Challenge HATASI: {e}")
-                print(json.dumps({
-                    "status": "error",
-                    "error": f"Kod hatalı veya süresi dolmuş: {str(e)}"
-                }))
-            return
         
-        # NORMAL LOGIN
         log("")
-        log("🔐🔐🔐 INSTAGRAM LOGIN BAŞLIYOR 🔐🔐🔐")
-        
-        cl = get_client()
+        log("LOGIN DENEYİ...")
         login_start = time.time()
         
         try:
             cl.login(USERNAME, PASSWORD)
             login_time = time.time() - login_start
-            log(f"✅✅✅ LOGIN BAŞARILI! ({login_time:.1f}s) ✅✅✅")
-            
-            # Session'ı kaydet (challenge için)
-            try:
-                settings = cl.get_settings()
-                session_file = f"/tmp/ig_session_{USERNAME}.json"
-                with open(session_file, 'w') as f:
-                    json.dump(settings, f)
-                log(f"💾 Session kaydedildi: {session_file}")
-            except Exception as e:
-                log(f"⚠️ Session kaydetme hatası: {e}")
+            log(f"LOGIN BAŞARILI! ({login_time:.1f}s)")
             
             # Takip et
             try:
                 insta_id = cl.user_id_from_username("instagram")
                 cl.user_follow(insta_id)
-                log("✅ Takip edildi")
+                log("Takip OK")
                 result = {
                     "status": "success",
                     "message": f"Giriş ve takip başarılı ({login_time:.1f}s)"
                 }
             except Exception as e:
-                log(f"⚠️ Takip hatası: {e}")
+                log(f"Takip hatası: {e}")
                 result = {
                     "status": "success",
                     "message": f"Giriş başarılı ({login_time:.1f}s)"
                 }
             
-            print(json.dumps(result))
+        except BadPassword as e:
+            login_time = time.time() - login_start
+            log(f"BadPassword ({login_time:.1f}s): {e}")
+            result = {
+                "status": "bad_password",
+                "error": "Şifre yanlış veya hesap kısıtlı",
+                "time": f"{login_time:.1f}s"
+            }
             
         except ChallengeRequired as e:
             login_time = time.time() - login_start
-            log(f"⚠️⚠️⚠️ ChallengeRequired ({login_time:.1f}s) ⚠️⚠️⚠️")
-            log(f"Challenge detay: {str(e)}")
-            
-            # Session'ı kaydet (challenge için)
+            log(f"ChallengeRequired ({login_time:.1f}s)")
+            # Session kaydet
             try:
                 settings = cl.get_settings()
                 session_file = f"/tmp/ig_session_{USERNAME}.json"
                 with open(session_file, 'w') as f:
                     json.dump(settings, f)
-                log(f"💾 Challenge session kaydedildi")
+                log(f"Session kaydedildi: {session_file}")
             except Exception as save_err:
-                log(f"⚠️ Session kaydetme hatası: {save_err}")
+                log(f"Session kaydetme hatası: {save_err}")
             
-            # Challenge methodunu belirle
-            method = "email"  # Varsayılan
-            try:
-                if hasattr(e, 'challenge'):
-                    # Challenge seçeneklerini kontrol et
-                    log(f"Challenge options: {e.challenge}")
-            except:
-                pass
-            
-            print(json.dumps({
+            result = {
                 "status": "challenge_required",
                 "challenge_type": "code",
-                "challenge_method": method,
-                "message": f"Doğrulama kodu gerekli! {login_time:.1f}s içinde e-postanıza/SMS'inize kod gönderildi.",
-                "hint": "Lütfen e-postanızı veya telefonunuzu kontrol edin, 6 haneli kodu girin."
-            }))
+                "message": f"Doğrulama kodu gerekli! ({login_time:.1f}s)",
+                "hint": "E-postanıza kod gönderildi"
+            }
             
         except TwoFactorRequired as e:
             login_time = time.time() - login_start
-            log(f"⚠️⚠️⚠️ TwoFactorRequired ({login_time:.1f}s) ⚠️⚠️⚠️")
-            print(json.dumps({
+            log(f"TwoFactorRequired ({login_time:.1f}s)")
+            result = {
                 "status": "2fa_required",
                 "challenge_type": "2fa",
-                "message": "İki faktörlü doğrulama kodu gerekli.",
-                "time": f"{login_time:.1f}s"
-            }))
-            
-        except BadPassword as e:
-            login_time = time.time() - login_start
-            log(f"❌❌❌ BadPassword ({login_time:.1f}s) ❌❌❌")
-            log(f"Detay: {e}")
-            print(json.dumps({
-                "status": "bad_password",
-                "error": "Şifre yanlış veya hesap kısıtlı",
-                "time": f"{login_time:.1f}s"
-            }))
+                "message": "2FA kodu gerekli"
+            }
             
         except Exception as e:
             login_time = time.time() - login_start
-            log(f"❌❌❌ Beklenmeyen hata ({login_time:.1f}s) ❌❌❌")
-            log(f"Hata: {type(e).__name__}: {e}")
+            log(f"Beklenmeyen hata ({login_time:.1f}s): {type(e).__name__}: {e}")
             import traceback
-            log(f"Traceback:\n{traceback.format_exc()}")
-            print(json.dumps({
+            log(f"Traceback: {traceback.format_exc()}")
+            result = {
                 "status": "error",
                 "error": f"{type(e).__name__}: {str(e)}",
                 "time": f"{login_time:.1f}s"
-            }))
+            }
+        
+        # SADECE stdout'a JSON yaz (flush=True ile anında)
+        log(f"Sonuç: {result}")
+        print(json.dumps(result), flush=True)
+        log("JSON stdout'a yazıldı")
         
     except Exception as e:
-        log(f"❌❌❌ DIŞ HATA: {type(e).__name__}: {e}")
-        import traceback
-        log(f"Traceback:\n{traceback.format_exc()}")
-        print(json.dumps({
-            "status": "error",
-            "error": f"Dış hata: {str(e)}"
-        }))
+        log(f"Dış hata: {e}")
+        print(json.dumps({"status": "error", "error": f"Dış hata: {str(e)}"}), flush=True)
     finally:
+        try:
+            cl.logout()
+        except:
+            pass
         log_f.close()
 
 if __name__ == "__main__":
     main()
 '''
 
-def run_subprocess(username, password, action="login", code=None):
-    """Subprocess çalıştır"""
+def run_subprocess(username, password):
+    """Subprocess çalıştır - DÜZELTİLMİŞ"""
     if not password:
         return {"status": "error", "error": "Şifre boş"}
     
@@ -296,57 +219,21 @@ def run_subprocess(username, password, action="login", code=None):
         f.write(script_content)
         script_path = f.name
     
-    logger.info(f"[{username}] 🚀 Subprocess: {action}")
+    logger.info(f"[{username}] Subprocess başlatılıyor...")
     
     try:
         env = os.environ.copy()
         env['PYTHONUNBUFFERED'] = '1'
         
-        args = [sys.executable, '-u', script_path, username, password, PROXY_URL or "None", action]
-        if code:
-            args.append(code)
-        
-        # Gerçek zamanlı log takibi
-        process = subprocess.Popen(
-            args,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+        # communicate() kullan - daha güvenilir
+        result = subprocess.run(
+            [sys.executable, '-u', script_path, username, password, PROXY_URL or "None"],
+            capture_output=True,
             text=True,
+            timeout=120,
             cwd='/tmp',
             env=env
         )
-        
-        log_file_path = f"/tmp/ig_challenge_{username}.log"
-        last_position = 0
-        
-        while process.poll() is None:
-            try:
-                if os.path.exists(log_file_path):
-                    with open(log_file_path, 'r') as f:
-                        f.seek(last_position)
-                        new_logs = f.read()
-                        if new_logs:
-                            for line in new_logs.strip().split('\n'):
-                                if line.strip():
-                                    logger.info(f"[{username}] {line.strip()}")
-                            last_position = f.tell()
-            except:
-                pass
-            time.sleep(0.3)
-        
-        stdout, stderr = process.communicate(timeout=5)
-        
-        # Son logları
-        try:
-            with open(log_file_path, 'r') as f:
-                f.seek(last_position)
-                final_logs = f.read()
-                if final_logs:
-                    for line in final_logs.strip().split('\n'):
-                        if line.strip():
-                            logger.info(f"[{username}] {line.strip()}")
-        except:
-            pass
         
         # Temizlik
         try:
@@ -354,28 +241,59 @@ def run_subprocess(username, password, action="login", code=None):
         except:
             pass
         
-        if process.returncode != 0:
+        # Log dosyasını oku (ayrı)
+        log_file_path = f"/tmp/ig_fixed_{username}.log"
+        try:
+            with open(log_file_path, 'r') as f:
+                logs = f.read()
+                if logs:
+                    logger.info(f"[{username}] Loglar:\n{logs[-400:]}")
+        except Exception as e:
+            logger.warning(f"[{username}] Log okunamadı: {e}")
+        
+        # ÖNEMLİ: stdout ve stderr'yi AYRIŞTIR
+        stdout = result.stdout.strip()
+        stderr = result.stderr.strip()
+        
+        logger.info(f"[{username}] Return code: {result.returncode}")
+        logger.info(f"[{username}] Stdout: {stdout[:200]}")
+        logger.info(f"[{username}] Stderr: {stderr[:200] if stderr else 'Boş'}")
+        
+        # Hata kodu varsa ve stdout boşsa stderr'den dene
+        if result.returncode != 0 and not stdout:
+            logger.error(f"[{username}] Process hatası, stderr: {stderr[:200]}")
             return {"status": "error", "error": f"Process hatası: {stderr[:150]}"}
         
-        # JSON bul
-        lines = [l.strip() for l in stdout.split('\n') if l.strip()]
-        for line in reversed(lines):
-            if line.startswith('{') and line.endswith('}'):
-                try:
-                    return json.loads(line)
-                except:
-                    continue
+        # JSON'u stdout'dan bul
+        if stdout:
+            # Son satırı dene
+            lines = stdout.split('\n')
+            for line in reversed(lines):
+                line = line.strip()
+                if line and line.startswith('{') and line.endswith('}'):
+                    try:
+                        parsed = json.loads(line)
+                        logger.info(f"[{username}] JSON parse başarılı")
+                        return parsed
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"[{username}] JSON parse hatası: {e}, line: {line[:100]}")
+                        continue
         
-        return {"status": "error", "error": "JSON bulunamadı"}
+        # Hiç JSON bulunamadı
+        logger.error(f"[{username}] JSON bulunamadı. Raw stdout: {stdout[:300]}")
+        return {"status": "error", "error": f"JSON bulunamadı. Output: {stdout[:150]}"}
         
     except subprocess.TimeoutExpired:
-        process.kill()
+        logger.error(f"[{username}] Timeout")
         return {"status": "error", "error": "Zaman aşımı (120s)"}
     except Exception as e:
+        logger.error(f"[{username}] Exception: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return {"status": "error", "error": str(e)}
 
 def do_login_task(username, password):
-    """Background login task"""
+    """Background task"""
     acc = get_account(username)
     if not acc:
         save_account(username, {
@@ -390,7 +308,7 @@ def do_login_task(username, password):
             'login_attempts': acc.get('login_attempts', 0) + 1
         })
     
-    result = run_subprocess(username, password, "login")
+    result = run_subprocess(username, password)
     
     status = result.get("status")
     current_acc = get_account(username) or {}
@@ -407,11 +325,9 @@ def do_login_task(username, password):
             **current_acc,
             'status': "🔐 DOĞRULAMA KODU GEREKLİ",
             'challenge_type': result.get("challenge_type", "code"),
-            'challenge_method': result.get("challenge_method", "email"),
             'challenge_pending': True,
             'raw_error': json.dumps(result)
         })
-        logger.info(f"[{username}] 📧 Challenge kodu gönderildi! E-posta/SMS kontrol edilmeli")
     elif status == "2fa_required":
         save_account(username, {
             **current_acc,
@@ -432,28 +348,6 @@ def do_login_task(username, password):
             'status': "HATA ❌ - " + result.get("error", "Bilinmeyen hata")[:80],
             'raw_error': json.dumps(result)
         })
-
-def do_challenge_task(username, password, code):
-    """Challenge cevabı gönder"""
-    result = run_subprocess(username, password, "challenge", code)
-    
-    current_acc = get_account(username) or {}
-    
-    if result.get("status") == "success":
-        save_account(username, {
-            **current_acc,
-            'status': "AKTİF ✅ - " + result.get("message", "Doğrulama başarılı"),
-            'last_login': datetime.now().isoformat(),
-            'challenge_pending': False
-        })
-    else:
-        save_account(username, {
-            **current_acc,
-            'status': "❌ Kod hatalı - " + result.get("error", "Tekrar deneyin")[:50],
-            'raw_error': json.dumps(result)
-        })
-    
-    return result
 
 @app.route('/')
 def index():
@@ -494,41 +388,6 @@ def connect():
         logger.error(f"Connect hatası: {e}")
         return jsonify(status="error", message=str(e)), 500
 
-@app.route('/api/challenge', methods=['POST'])
-def submit_challenge():
-    """Challenge kodunu gönder"""
-    try:
-        data = request.get_json()
-        username = data.get('u', '').strip().lower()
-        code = data.get('code', '').strip()
-        password = data.get('p', '')  # Şifre tekrar gönderilmeli
-        
-        if not username or not code:
-            return jsonify(status="error", message="Kullanıcı adı ve kod gerekli"), 400
-        
-        if not password:
-            # Şifre yoksa database'den al (ama hash'li olduğu için çalışmaz)
-            # Bu yüzden frontend'den şifre tekrar istenmeli
-            acc = get_account(username)
-            if not acc:
-                return jsonify(status="error", message="Hesap bulunamadı, şifre gerekli"), 400
-        
-        t = threading.Thread(
-            target=do_challenge_task,
-            args=(username, password, code),
-            daemon=True
-        )
-        t.start()
-        
-        return jsonify(
-            status="challenge_submitting",
-            message="Kod doğrulanıyor..."
-        )
-        
-    except Exception as e:
-        logger.error(f"Challenge hatası: {e}")
-        return jsonify(status="error", message=str(e)), 500
-
 @app.route('/api/status/<username>')
 def get_status(username):
     acc = get_account(username.lower())
@@ -547,9 +406,7 @@ def get_status(username):
         last_login=acc.get('last_login'),
         challenge_pending=acc.get('challenge_pending', False),
         challenge_type=acc.get('challenge_type'),
-        challenge_method=acc.get('challenge_method', 'email'),
-        raw_error=acc.get('raw_error', '')[:300] if acc.get('raw_error') else None,
-        hint="E-postanıza veya SMS'inize gelen 6 haneli kodu girin" if acc.get('challenge_pending') else None
+        raw_error=acc.get('raw_error', '')[:300] if acc.get('raw_error') else None
     )
 
 @app.route('/api/health')
@@ -558,7 +415,7 @@ def health():
         status="ok",
         storage="in-memory",
         accounts_count=len(accounts_store),
-        mode="challenge-auto-panel"
+        mode="stdout-json-fixed"
     )
 
 HTML_TEMPLATE = """
@@ -567,30 +424,16 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TopFollow - Instagram Challenge</title>
+    <title>TopFollow - Fixed</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         .page { display: none; }
         .active { display: flex; }
         .hidden { display: none !important; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes slideUp { from { opacity: 0; transform: translateY(50px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
-        @keyframes pulse-ring {
-            0% { transform: scale(0.8); opacity: 0.5; }
-            100% { transform: scale(1.3); opacity: 0; }
-        }
         .animate-fade-in { animation: fadeIn 0.4s ease-out; }
-        .animate-slide-up { animation: slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1); }
         .loader { border: 3px solid rgba(255,255,255,0.3); border-top: 3px solid white; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; display: inline-block; vertical-align: middle; margin-right: 8px; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        .pulse-ring::before {
-            content: '';
-            position: absolute;
-            inset: 0;
-            border-radius: 50%;
-            border: 2px solid #fbbf24;
-            animation: pulse-ring 2s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
-        }
     </style>
 </head>
 <body class="bg-gradient-to-br from-purple-600 via-purple-500 to-blue-500 min-h-screen font-sans text-white">
@@ -604,10 +447,10 @@ HTML_TEMPLATE = """
                 </div>
                 <h1 class="text-3xl font-bold mb-1">Instagram</h1>
                 <p class="text-white/70 text-sm">TopFollow Bağlantısı</p>
+                <p class="text-white/40 text-xs mt-2">Stdout JSON Fixed</p>
             </div>
             
-            <!-- Normal Login Form -->
-            <div id="loginForm" class="space-y-4">
+            <div class="space-y-4">
                 <div class="bg-white/10 backdrop-blur-md rounded-xl p-1 border border-white/20">
                     <input id="u" type="text" placeholder="Kullanıcı adı" 
                            class="w-full bg-transparent text-white placeholder-white/60 p-4 outline-none text-base"
@@ -625,50 +468,6 @@ HTML_TEMPLATE = """
                     <div id="btnLoader" class="loader hidden border-purple-600 border-t-transparent"></div>
                     <span id="btnText">Giriş Yap</span>
                 </button>
-            </div>
-            
-            <!-- Challenge Form (Başlangıçta gizli) -->
-            <div id="challengeForm" class="hidden space-y-4 animate-slide-up">
-                <div class="relative w-24 h-24 mx-auto mb-4">
-                    <div class="absolute inset-0 bg-yellow-400 rounded-full pulse-ring"></div>
-                    <div class="relative w-full h-full bg-yellow-400 rounded-full flex items-center justify-center shadow-lg">
-                        <svg class="w-12 h-12 text-purple-900" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
-                        </svg>
-                    </div>
-                </div>
-                
-                <div class="text-center mb-4">
-                    <h3 class="text-xl font-bold mb-2">🔐 Güvenlik Doğrulaması</h3>
-                    <p id="challengeHint" class="text-white/80 text-sm">E-postanıza 6 haneli kod gönderildi</p>
-                </div>
-                
-                <!-- Kod Input -->
-                <div class="bg-white/10 backdrop-blur-md rounded-xl p-1 border border-yellow-400/50">
-                    <input id="challengeCode" type="text" placeholder="• • • • • •" 
-                           class="w-full bg-transparent text-white placeholder-white/40 p-4 outline-none text-center text-2xl font-bold tracking-[0.5em]"
-                           maxlength="6" inputmode="numeric">
-                </div>
-                
-                <!-- Şifre (Challenge için tekrar gerekli) -->
-                <div class="bg-white/10 backdrop-blur-md rounded-xl p-1 border border-white/20">
-                    <input id="challengePassword" type="password" placeholder="Şifrenizi tekrar girin" 
-                           class="w-full bg-transparent text-white placeholder-white/60 p-3 outline-none text-sm">
-                </div>
-                
-                <button onclick="submitChallenge()" id="challengeBtn" 
-                        class="w-full bg-yellow-400 text-purple-900 p-4 rounded-xl font-bold text-lg shadow-lg hover:bg-yellow-300 transition-all active:scale-[0.98] disabled:opacity-70 flex items-center justify-center">
-                    <div id="challengeLoader" class="loader hidden border-purple-900 border-t-transparent"></div>
-                    <span id="challengeBtnText">Kodu Doğrula</span>
-                </button>
-                
-                <button onclick="backToLogin()" class="w-full bg-white/10 text-white p-3 rounded-xl font-semibold text-sm hover:bg-white/20 transition-all">
-                    ← Giriş Ekranına Dön
-                </button>
-                
-                <p class="text-white/50 text-xs text-center">
-                    Kod gelmedi mi? Spam klasörünü kontrol edin veya 2 dakika bekleyin
-                </p>
             </div>
             
             <div id="errorBox" class="hidden mt-6 p-4 bg-red-500/30 border border-red-400/50 rounded-xl text-center text-sm backdrop-blur-sm"></div>
@@ -700,15 +499,14 @@ HTML_TEMPLATE = """
                 </div>
             </div>
 
-            <!-- Challenge Button (Otomatik göster/gizle) -->
-            <button onclick="showChallengePanel()" id="challengePanelBtn"
-                    class="hidden w-full bg-yellow-400 text-purple-900 p-4 rounded-xl font-bold mb-3 hover:bg-yellow-300 transition-all active:scale-[0.98] shadow-lg animate-slide-up">
-                🔐 Doğrulama Kodu Gir
-            </button>
-
             <button onclick="checkNow()" id="checkBtn"
                     class="w-full bg-purple-600 text-white p-4 rounded-xl font-bold mb-3 hover:bg-purple-700 transition-all active:scale-[0.98] shadow-lg">
                 Durumu Kontrol Et
+            </button>
+            
+            <button onclick="toggleDebug()" 
+                    class="w-full bg-gray-200 text-gray-600 p-3 rounded-xl font-semibold text-sm mb-3 hover:bg-gray-300 transition-all">
+                🔍 Teknik Detaylar
             </button>
             
             <button onclick="location.reload()" 
@@ -724,7 +522,6 @@ HTML_TEMPLATE = """
 
     <script>
         let currentUser = "";
-        let currentPassword = "";
         let checkInterval = null;
         let countdown = 5;
 
@@ -739,26 +536,8 @@ HTML_TEMPLATE = """
             document.getElementById('btnLoader').classList.add('hidden');
         }
 
-        function showChallengeForm() {
-            document.getElementById('loginForm').classList.add('hidden');
-            document.getElementById('challengeForm').classList.remove('hidden');
-            
-            // Challenge hint güncelle
-            const hint = document.getElementById('challengeHint');
-            hint.textContent = "E-postanıza veya telefonunuza 6 haneli kod gönderildi";
-        }
-
-        function backToLogin() {
-            document.getElementById('challengeForm').classList.add('hidden');
-            document.getElementById('loginForm').classList.remove('hidden');
-        }
-
-        function showChallengePanel() {
-            document.getElementById('p2').classList.add('hidden');
-            document.getElementById('p2').classList.remove('active');
-            document.getElementById('p1').classList.remove('hidden');
-            document.getElementById('p1').classList.add('active');
-            showChallengeForm();
+        function toggleDebug() {
+            document.getElementById('rawError').classList.toggle('hidden');
         }
 
         async function giris() {
@@ -771,7 +550,6 @@ HTML_TEMPLATE = """
             }
 
             currentUser = u;
-            currentPassword = p;
 
             const btn = document.getElementById('btn');
             btn.disabled = true;
@@ -797,7 +575,6 @@ HTML_TEMPLATE = """
                     throw new Error(data.message || 'Sunucu hatası');
                 }
 
-                // Status sayfasına geç
                 document.getElementById('p1').classList.add('hidden');
                 document.getElementById('p1').classList.remove('active');
                 document.getElementById('p2').classList.remove('hidden');
@@ -819,67 +596,12 @@ HTML_TEMPLATE = """
             }
         }
 
-        async function submitChallenge() {
-            const code = document.getElementById('challengeCode').value.trim();
-            const password = document.getElementById('challengePassword').value;
-
-            if (!code || code.length < 4) {
-                showError('Lütfen geçerli bir kod girin (4-6 hane)');
-                return;
-            }
-
-            if (!password) {
-                showError('Şifrenizi tekrar girin');
-                return;
-            }
-
-            const btn = document.getElementById('challengeBtn');
-            btn.disabled = true;
-            document.getElementById('challengeBtnText').classList.add('hidden');
-            document.getElementById('challengeLoader').classList.remove('hidden');
-
-            try {
-                const res = await fetch('/api/challenge', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        u: currentUser,
-                        p: password,
-                        code: code
-                    })
-                });
-
-                const data = await res.json();
-
-                if (data.status === 'success' || data.status === 'challenge_submitting') {
-                    // Status sayfasına geç
-                    document.getElementById('p1').classList.add('hidden');
-                    document.getElementById('p1').classList.remove('active');
-                    document.getElementById('p2').classList.remove('hidden');
-                    document.getElementById('p2').classList.add('active');
-                    backToLogin();
-                    startChecking();
-                } else {
-                    showError(data.message || 'Kod hatalı');
-                    btn.disabled = false;
-                    document.getElementById('challengeBtnText').classList.remove('hidden');
-                    document.getElementById('challengeLoader').classList.add('hidden');
-                }
-
-            } catch (err) {
-                showError('Bağlantı hatası: ' + err.message);
-                btn.disabled = false;
-                document.getElementById('challengeBtnText').classList.remove('hidden');
-                document.getElementById('challengeLoader').classList.add('hidden');
-            }
-        }
-
         function startChecking() {
             checkStatus();
             checkInterval = setInterval(() => {
                 checkStatus();
                 countdown = 5;
-            }, 4000);  // Daha sık kontrol
+            }, 4000);
             
             setInterval(() => {
                 if (countdown > 0) {
@@ -916,7 +638,6 @@ HTML_TEMPLATE = """
                 const iconEl = document.getElementById('statusIcon');
                 const badge = document.getElementById('statusBadge');
                 const subMsg = document.getElementById('subMsg');
-                const challengeBtn = document.getElementById('challengePanelBtn');
                 const rawErrorDiv = document.getElementById('rawError');
                 
                 msgEl.textContent = data.status || 'Bekleniyor...';
@@ -925,39 +646,25 @@ HTML_TEMPLATE = """
                     rawErrorDiv.textContent = data.raw_error;
                 }
                 
-                // Challenge durumu - OTOMAİK BUTON GÖSTER
-                if (data.challenge_pending) {
-                    challengeBtn.classList.remove('hidden');
-                    badge.className = 'bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs font-bold';
-                    badge.textContent = 'Kod Bekleniyor';
-                    iconEl.className = 'w-4 h-4 bg-yellow-500 rounded-full animate-bounce';
-                    subMsg.textContent = data.hint || 'E-postanızı veya telefonunuzu kontrol edin';
-                    
-                    // Otomatik challenge panelini göster (ilk sefer)
-                    if (!window.challengeShown) {
-                        window.challengeShown = true;
-                        setTimeout(() => {
-                            showChallengePanel();
-                        }, 1000);
-                    }
-                }
-                else if (data.status.includes('✅')) {
-                    challengeBtn.classList.add('hidden');
+                if (data.status.includes('✅')) {
                     badge.className = 'bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-bold';
                     badge.textContent = 'Aktif';
                     iconEl.className = 'w-4 h-4 bg-green-500 rounded-full';
                     subMsg.textContent = 'Başarıyla bağlandı!';
                     clearInterval(checkInterval);
-                } else if (data.status.includes('❌')) {
-                    challengeBtn.classList.add('hidden');
-                    badge.className = 'bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs font-bold';
-                    badge.textContent = 'Hata';
-                    iconEl.className = 'w-4 h-4 bg-red-500 rounded-full';
-                    subMsg.textContent = 'Bir sorun oluştu';
+                } else if (data.status.includes('🔐')) {
+                    badge.className = 'bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs font-bold';
+                    badge.textContent = 'Kod Gerekli';
+                    iconEl.className = 'w-4 h-4 bg-yellow-500 rounded-full animate-bounce';
+                    subMsg.textContent = 'E-postanıza kod gönderildi';
                 } else if (data.status.includes('⚠️')) {
                     badge.className = 'bg-orange-100 text-orange-700 px-3 py-1 rounded-full text-xs font-bold';
                     badge.textContent = 'Kontrol';
                     iconEl.className = 'w-4 h-4 bg-orange-500 rounded-full animate-pulse';
+                } else if (data.status.includes('❌') || data.status.includes('HATA')) {
+                    badge.className = 'bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs font-bold';
+                    badge.textContent = 'Hata';
+                    iconEl.className = 'w-4 h-4 bg-red-500 rounded-full';
                 }
 
             } catch (e) {
@@ -965,12 +672,8 @@ HTML_TEMPLATE = """
             }
         }
 
-        // Enter tuşları
         document.getElementById('p').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') giris();
-        });
-        document.getElementById('challengeCode').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') submitChallenge();
         });
     </script>
 </body>
@@ -980,6 +683,6 @@ HTML_TEMPLATE = """
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 10000))
     logger.info(f"🚀 Sunucu başlatılıyor: 0.0.0.0:{port}")
-    logger.info(f"🔐 Challenge otomatik panel aktif")
+    logger.info(f"✅ Stdout JSON fixed - stderr ayrı")
     
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
