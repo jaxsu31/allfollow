@@ -50,7 +50,51 @@ def save_account(username, data):
             'created_at': data.get('created_at', datetime.now().isoformat())
         }
 
-# GELİŞMİŞ LOGIN SCRIPT - Challenge algılama iyileştirildi
+# ========== ROUTE'LER EKLENDİ ==========
+
+@app.route('/')
+def index():
+    return jsonify({
+        "status": "OK",
+        "message": "Instagram API çalışıyor",
+        "accounts": len(accounts_store)
+    })
+
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+    
+    if not username or not password:
+        return jsonify({"error": "Kullanıcı adı ve şifre gerekli"}), 400
+    
+    # LOGIN_SCRIPT'i çalıştır
+    try:
+        result = subprocess.run(
+            ['python', '-c', LOGIN_SCRIPT, username, password, PROXY_URL],
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        
+        output = result.stdout.strip()
+        if output:
+            try:
+                response = json.loads(output)
+                return jsonify(response)
+            except:
+                return jsonify({"output": output})
+        else:
+            return jsonify({"error": "Boş yanıt", "stderr": result.stderr})
+            
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Zaman aşımı"}), 504
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ========== LOGIN SCRIPT ==========
+
 LOGIN_SCRIPT = """
 import sys
 import json
@@ -67,7 +111,7 @@ log_f = open(LOG_FILE, "w", buffering=1)
 def log(msg):
     timestamp = time.strftime('%H:%M:%S')
     line = f"{timestamp} | {msg}"
-    log_f.write(line + "\n")
+    log_f.write(line + "\\n")
     log_f.flush()
 
 log("=" * 50)
@@ -115,7 +159,6 @@ try:
     client.login(USERNAME, PASSWORD)
     log("✅ Giriş BAŞARILI!")
     
-    # Session bilgilerini al
     session_id = client.sessionid
     user_id = client.user_id
     
@@ -124,8 +167,7 @@ try:
         "message": "Giriş başarılı",
         "username": USERNAME,
         "user_id": user_id,
-        "session_id": session_id,
-        "has_challenge": False
+        "session_id": session_id
     }
     
     print(json.dumps(result), flush=True)
@@ -142,9 +184,7 @@ except ChallengeRequired as e:
     log("⚠️ CHALLENGE GEREKLİ")
     print(json.dumps({
         "status": "challenge_required",
-        "error": "Doğrulama gerekli",
-        "challenge_type": "unknown",
-        "raw": str(e)
+        "error": "Doğrulama gerekli"
     }), flush=True)
     log_f.close()
     sys.exit(1)
@@ -159,17 +199,16 @@ except TwoFactorRequired:
     sys.exit(1)
     
 except PleaseWaitFewMinutes as e:
-    log("⏰ RATE LIMIT - BEKLEME GEREKLİ")
+    log("⏰ RATE LIMIT")
     print(json.dumps({
         "status": "rate_limit",
-        "error": "Birkaç dakika bekleyin",
-        "raw": str(e)
+        "error": "Birkaç dakika bekleyin"
     }), flush=True)
     log_f.close()
     sys.exit(1)
     
 except Exception as e:
-    log(f"❌ BEKLENMEYEN HATA: {str(e)}")
+    log(f"❌ HATA: {str(e)}")
     print(json.dumps({
         "status": "error",
         "error": str(e)
