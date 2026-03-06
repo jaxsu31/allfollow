@@ -1,9 +1,10 @@
 import os
 import time
+import random
 from flask import Flask, request, jsonify, render_template_string
 from flask_sqlalchemy import SQLAlchemy
 from instagrapi import Client
-from instagrapi.exceptions import ChallengeRequired, BadPassword, LoginRequired, ProxyError
+from instagrapi.exceptions import ChallengeRequired, BadPassword, LoginRequired
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14,7 +15,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-# PROXY SORUN ÇIKARABİLİR, ŞİMDİLİK NONE YAPIYORUZ
+# Bağlantı sorunlarını minimuma indirmek için proxy şimdilik None
 PROXY_URL = None 
 
 active_sessions = {}
@@ -35,16 +36,33 @@ def login_api():
     u, p = data.get('u'), data.get('p')
     cl = Client()
     
-    # Cihaz ayarlarını rastgele yap (Giriş ihtimalini artırır)
-    cl.set_device_settings(cl.delay_range == [2, 4])
+    # Giriş şansını artırmak için rastgele gecikme ve cihaz simülasyonu
+    cl.set_device_settings({
+        "app_version": "269.0.0.18.75",
+        "android_version": 26,
+        "android_release": "8.0.0",
+        "dpi": "480dpi",
+        "resolution": "1080x1920",
+        "manufacturer": "samsung",
+        "device": "SM-G950F",
+        "model": "dreamqlte",
+        "cpu": "samsungexynos8895",
+        "version_code": "442431182"
+    })
     
     if PROXY_URL:
-        cl.set_proxy(PROXY_URL)
-    
+        try:
+            cl.set_proxy(PROXY_URL)
+        except:
+            pass
+            
     active_sessions[u] = cl
     
     try:
-        print(f"DEBUG: {u} giriş denemesi yapılıyor...")
+        print(f"DEBUG: {u} için giriş deneniyor...")
+        # Instagram'ın botu anlamaması için kısa bir bekleme
+        time.sleep(random.uniform(1, 3))
+        
         if cl.login(u, p):
             acc = IGAccount.query.filter_by(username=u).first()
             if not acc:
@@ -56,23 +74,24 @@ def login_api():
             return jsonify(status="success", next_step="dashboard")
             
     except BadPassword:
-        return jsonify(status="error", message="Şifre Yanlış! (Lütfen büyük/küçük harfe dikkat edin)")
+        return jsonify(status="error", message="Şifre Yanlış! Lütfen kontrol edin.")
     except ChallengeRequired:
         return jsonify(status="challenge", next_step="verify")
     except Exception as e:
-        # Hatanın gerçek sebebini terminale yazdıralım
-        err_msg = str(e)
-        print(f"KRITIK HATA: {err_msg}")
-        if "checkpoint" in err_msg.lower():
+        err_msg = str(e).lower()
+        print(f"LOG: {err_msg}")
+        if "checkpoint" in err_msg or "challenge" in err_msg:
             return jsonify(status="challenge", next_step="verify")
-        return jsonify(status="error", message="Instagram Erişimi Engelledi (IP Block). Lütfen biraz bekleyip tekrar deneyin.")
+        if "feedback_required" in err_msg:
+            return jsonify(status="error", message="Instagram çok fazla deneme yaptığınızı algıladı. 15 dk bekleyin.")
+        return jsonify(status="error", message="Bağlantı Reddildi. (IP Engeli)")
 
 @app.route('/api/verify', methods=['POST'])
 def verify_api():
     data = request.json
     u, code = data.get('u'), data.get('code')
     cl = active_sessions.get(u)
-    if not cl: return jsonify(status="error", message="Oturum Yok")
+    if not cl: return jsonify(status="error", message="Oturum Zaman Aşımı")
     try:
         cl.challenge_set_code(code)
         acc = IGAccount.query.filter_by(username=u).first()
@@ -80,68 +99,59 @@ def verify_api():
             acc.status = "AKTIF"
             db.session.commit()
         return jsonify(status="success", next_step="dashboard")
-    except Exception as e:
-        return jsonify(status="error", message="Kod Doğrulanamadı: " + str(e))
+    except Exception:
+        return jsonify(status="error", message="Kod hatalı veya süresi doldu.")
 
-# --- UI TARAFI ---
+# --- UI (MODERN VE HATASIZ) ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="tr">
 <head>
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AllFollow VIP</title>
+    <title>AllFollow</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { background: #09090b; color: white; font-family: sans-serif; }
-        .glass { background: rgba(24, 24, 27, 0.9); border: 1px solid rgba(63, 63, 70, 0.5); backdrop-filter: blur(10px); }
+        body { background: #000; color: #fff; font-family: sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+        .glass { background: #121212; border: 1px solid #333; padding: 2rem; border-radius: 1.5rem; width: 100%; max-width: 350px; text-align: center; }
         .page { display: none; } .active { display: block; }
-        .loader { border: 2px solid #f3f3f3; border-top: 2px solid #a855f7; border-radius: 50%; width: 16px; height: 16px; animation: spin 1s linear infinite; display: inline-block; margin-right: 8px; }
+        input { width: 100%; background: #1f1f1f; border: 1px solid #333; padding: 0.8rem; border-radius: 0.75rem; color: #fff; margin-bottom: 1rem; outline: none; font-size: 14px; }
+        input:focus { border-color: #a855f7; }
+        button { width: 100%; background: #a855f7; color: #fff; font-weight: bold; padding: 0.8rem; border-radius: 0.75rem; border: none; cursor: pointer; transition: 0.3s; }
+        button:disabled { opacity: 0.5; }
+        .loader { border: 2px solid #f3f3f3; border-top: 2px solid #a855f7; border-radius: 50%; width: 16px; height: 16px; animation: spin 1s linear infinite; display: inline-block; vertical-align: middle; margin-right: 8px; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
-<body class="flex items-center justify-center min-h-screen p-4">
+<body>
 
-    <div id="login-page" class="page active w-full max-w-[350px]">
-        <div class="glass p-8 rounded-3xl text-center shadow-2xl">
-            <h1 class="text-3xl font-black italic mb-6 text-purple-500">ALLFOLLOW</h1>
-            <div class="space-y-4 text-left">
-                <input id="u" placeholder="Kullanıcı Adı" class="w-full bg-black border border-zinc-800 p-3 rounded-xl outline-none focus:border-purple-500 text-sm">
-                <input id="p" type="password" placeholder="Şifre" class="w-full bg-black border border-zinc-800 p-3 rounded-xl outline-none focus:border-purple-500 text-sm">
-                <button onclick="handleLogin()" id="login-btn" class="w-full bg-purple-600 font-bold py-3 rounded-xl">GİRİŞ YAP</button>
-            </div>
-            <p id="err" class="text-red-500 text-[11px] mt-4 font-bold text-center"></p>
-        </div>
+    <div id="login-page" class="page active glass">
+        <h1 style="color: #a855f7; font-weight: 900; font-style: italic; font-size: 24px; margin-bottom: 1.5rem;">ALLFOLLOW</h1>
+        <input id="u" placeholder="Kullanıcı Adı">
+        <input id="p" type="password" placeholder="Şifre">
+        <button onclick="handleLogin()" id="btn">GİRİŞ YAP</button>
+        <p id="err" style="color: #ef4444; font-size: 11px; margin-top: 1rem; font-weight: bold;"></p>
     </div>
 
-    <div id="verify-page" class="page w-full max-w-[350px]">
-        <div class="glass p-8 rounded-3xl text-center border-amber-500/50">
-            <h2 class="text-xl font-bold mb-4 text-amber-500 text-center">Doğrulama Gerekli</h2>
-            <input id="vcode" placeholder="000000" class="w-full bg-black border border-zinc-800 p-4 rounded-xl text-center text-2xl tracking-widest outline-none mb-4">
-            <button onclick="handleVerify()" id="verify-btn" class="w-full bg-amber-600 font-bold py-3 rounded-xl text-center">ONAYLA</button>
-        </div>
+    <div id="verify-page" class="page glass">
+        <h2 style="color: #f59e0b; margin-bottom: 1rem;">Güvenlik Kodu</h2>
+        <p style="font-size: 12px; color: #888; margin-bottom: 1.5rem;">Instagram'dan gelen kodu girin.</p>
+        <input id="vcode" placeholder="000000" style="text-align: center; font-size: 24px; letter-spacing: 5px;">
+        <button onclick="handleVerify()" id="vbtn" style="background: #f59e0b;">ONAYLA</button>
     </div>
 
-    <div id="dashboard-page" class="page w-full max-w-[400px]">
-        <div class="glass p-8 rounded-3xl border-t-4 border-green-500 shadow-2xl text-center">
-            <h2 class="text-2xl font-black text-green-500 mb-2">Giriş Başarılı ✅</h2>
-            <p id="final-user" class="text-white font-bold mb-6 text-center"></p>
-            <div class="grid grid-cols-1 gap-2">
-                <button class="p-4 bg-zinc-900 rounded-2xl border border-zinc-800 font-bold text-center">PANELİ KULLANMAYA BAŞLA</button>
-            </div>
-        </div>
+    <div id="dashboard-page" class="page glass" style="border-top: 4px solid #22c55e;">
+        <h2 style="color: #22c55e; margin-bottom: 0.5rem;">Giriş Başarılı ✅</h2>
+        <p id="final-user" style="font-weight: bold; margin-bottom: 1.5rem;"></p>
+        <button onclick="location.reload()" style="background: #333;">ÇIKIŞ YAP</button>
     </div>
 
     <script>
         async function handleLogin() {
-            const u = document.getElementById('u').value;
-            const p = document.getElementById('p').value;
-            const btn = document.getElementById('login-btn');
-            const err = document.getElementById('err');
+            const u = document.getElementById('u').value, p = document.getElementById('p').value;
+            const btn = document.getElementById('btn'), err = document.getElementById('err');
             if(!u || !p) return;
-            btn.disabled = true;
-            btn.innerHTML = '<div class="loader"></div> BAĞLANIYOR...';
+            btn.disabled = true; btn.innerHTML = '<div class="loader"></div> BAĞLANIYOR...';
             err.innerText = "";
-            
             try {
                 const r = await fetch('/api/login', {
                     method: 'POST',
@@ -156,21 +166,18 @@ HTML_TEMPLATE = """
                     showPage('verify-page');
                 } else {
                     err.innerText = d.message;
-                    btn.disabled = false;
-                    btn.innerText = "GİRİŞ YAP";
+                    btn.disabled = false; btn.innerText = "GİRİŞ YAP";
                 }
-            } catch (e) {
-                err.innerText = "Sunucu hatası!";
-                btn.disabled = false;
+            } catch {
+                err.innerText = "Bağlantı Hatası!";
+                btn.disabled = false; btn.innerText = "GİRİŞ YAP";
             }
         }
 
         async function handleVerify() {
-            const code = document.getElementById('vcode').value;
-            const u = document.getElementById('u').value;
-            const btn = document.getElementById('verify-btn');
-            btn.disabled = true;
-            btn.innerText = "ONAYLANIYOR...";
+            const code = document.getElementById('vcode').value, u = document.getElementById('u').value;
+            const btn = document.getElementById('vbtn');
+            btn.disabled = true; btn.innerText = "ONAYLANIYOR...";
             const r = await fetch('/api/verify', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -182,8 +189,7 @@ HTML_TEMPLATE = """
                 document.getElementById('final-user').innerText = "@" + u;
             } else {
                 alert(d.message);
-                btn.disabled = false;
-                btn.innerText = "ONAYLA";
+                btn.disabled = false; btn.innerText = "ONAYLA";
             }
         }
 
