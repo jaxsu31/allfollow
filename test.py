@@ -28,7 +28,7 @@ accounts_lock = threading.Lock()
 accounts_store = {}
 
 # PROXY
-PROXY_URL = "http://SDDLzRveLbkavJr:MPvdO65MOnMifL7@82.41.250.136:42158"
+PROXY_URL = os.getenv("PROXY_URL", "http://SDDLzRveLbkavJr:MPvdO65MOnMifL7@82.41.250.136:42158")
 logger.info(f"Proxy: {PROXY_URL[:30]}...")
 
 def get_account(username):
@@ -51,7 +51,7 @@ def save_account(username, data):
         }
 
 # GELİŞMİŞ LOGIN SCRIPT - Challenge algılama iyileştirildi
-LOGIN_SCRIPT = r'''
+LOGIN_SCRIPT = """
 import sys
 import json
 import time
@@ -93,5 +93,91 @@ try:
     log("✅ Import OK")
 except Exception as e:
     log(f"❌ Import HATASI: {e}")
-    print(json.dumps
+    print(json.dumps({"status": "error", "error": f"Import hatası: {e}"}), flush=True)
+    sys.exit(1)
+
+# CLIENT OLUŞTUR
+log("🔧 Client oluşturuluyor...")
+client = Client()
+
+# PROXY AYARLA
+if PROXY and PROXY.strip():
+    log(f"🌐 Proxy ayarlanıyor: {PROXY[:30]}...")
+    try:
+        client.set_proxy(PROXY)
+        log("✅ Proxy ayarlandı")
+    except Exception as e:
+        log(f"⚠️ Proxy hatası: {e}")
+
+# GİRİŞ YAP
+log("🔐 Giriş yapılıyor...")
+try:
+    client.login(USERNAME, PASSWORD)
+    log("✅ Giriş BAŞARILI!")
     
+    # Session bilgilerini al
+    session_id = client.sessionid
+    user_id = client.user_id
+    
+    result = {
+        "status": "success",
+        "message": "Giriş başarılı",
+        "username": USERNAME,
+        "user_id": user_id,
+        "session_id": session_id,
+        "has_challenge": False
+    }
+    
+    print(json.dumps(result), flush=True)
+    log_f.close()
+    sys.exit(0)
+    
+except BadPassword:
+    log("❌ HATALI ŞİFRE")
+    print(json.dumps({"status": "error", "error": "Hatalı şifre"}), flush=True)
+    log_f.close()
+    sys.exit(1)
+    
+except ChallengeRequired as e:
+    log("⚠️ CHALLENGE GEREKLİ")
+    print(json.dumps({
+        "status": "challenge_required",
+        "error": "Doğrulama gerekli",
+        "challenge_type": "unknown",
+        "raw": str(e)
+    }), flush=True)
+    log_f.close()
+    sys.exit(1)
+    
+except TwoFactorRequired:
+    log("⚠️ 2FA GEREKLİ")
+    print(json.dumps({
+        "status": "2fa_required",
+        "error": "İki faktörlü doğrulama gerekli"
+    }), flush=True)
+    log_f.close()
+    sys.exit(1)
+    
+except PleaseWaitFewMinutes as e:
+    log("⏰ RATE LIMIT - BEKLEME GEREKLİ")
+    print(json.dumps({
+        "status": "rate_limit",
+        "error": "Birkaç dakika bekleyin",
+        "raw": str(e)
+    }), flush=True)
+    log_f.close()
+    sys.exit(1)
+    
+except Exception as e:
+    log(f"❌ BEKLENMEYEN HATA: {str(e)}")
+    print(json.dumps({
+        "status": "error",
+        "error": str(e)
+    }), flush=True)
+    log_f.close()
+    sys.exit(1)
+"""
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port, debug=False)
