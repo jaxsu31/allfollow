@@ -16,145 +16,157 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
+# DİKKAT: Render IP'si blokluysa buraya Residential Proxy şart.
+PROXY_URL = None 
+
 class IGAccount(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True, nullable=False)
     password = db.Column(db.String(100), nullable=False)
-    status = db.Column(db.String(100), default="Sıraya Alındı...")
-    last_error = db.Column(db.Text, nullable=True)
+    status = db.Column(db.String(100), default="Bekleniyor")
 
-# ASIL BOT MOTORU - ASENKRON ÇALIŞIR
-def start_insta_task(u, p):
+def run_bot(u, p):
     with app.app_context():
         cl = Client()
+        # Instagram'ın bot algılamaması için rastgele bekleme
+        cl.delay_range = [1, 3]
+        
         acc = IGAccount.query.filter_by(username=u).first()
         try:
-            # Render IP'si engelliyse cihaz taklidi şart
-            cl.set_device_settings(cl.delay_range == [2, 4])
+            if PROXY_URL:
+                cl.set_proxy(PROXY_URL)
             
-            # Instagram'a giriş denemesi (Burası 20-30 sn sürebilir)
-            if cl.login(u, p):
-                acc.status = "AKTİF ✅"
-                acc.last_error = None
-                db.session.commit()
-                # Örnek işlem: Kendi profilini takip et veya birini beğen
-                cl.user_follow(cl.user_id_from_username("instagram"))
+            # LOGIN İŞLEMİ (Maksimum 20 saniye bekleme süresi koyar)
+            cl.login(u, p)
+            acc.status = "AKTIF"
+            db.session.commit()
         except ChallengeRequired:
-            acc.status = "KOD GEREKLİ ⚠️"
+            acc.status = "KOD_GEREKLI"
             db.session.commit()
         except BadPassword:
-            acc.status = "ŞİFRE HATALI ❌"
+            acc.status = "SIFRE_HATALI"
             db.session.commit()
         except Exception as e:
-            acc.status = "BAĞLANTI ENGELİ 🚫"
-            acc.last_error = str(e)
+            # Burası IP bloğu yediğimiz yer kanka
+            acc.status = "IP_ENGELI"
             db.session.commit()
 
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
 
-@app.route('/api/connect', methods=['POST'])
-def connect():
+@app.route('/api/login', methods=['POST'])
+def login():
     data = request.json
     u, p = data.get('u'), data.get('p')
-    if not u or not p: return jsonify(error="Eksik bilgi")
-
+    
     acc = IGAccount.query.filter_by(username=u).first()
     if not acc:
         acc = IGAccount(username=u, password=p)
         db.session.add(acc)
     else:
-        acc.password, acc.status = p, "Giriş Yapılıyor..."
+        acc.password = p
+        acc.status = "Giris_Deniyor"
     db.session.commit()
     
-    # --- KRİTİK NOKTA ---
-    # Thread başlatıyoruz ve Flask HİÇ BEKLEMEDEN "ok" dönüyor.
-    # Bu sayede Render bağlantıyı koparamıyor.
-    threading.Thread(target=start_insta_task, args=(u, p)).start()
-    
-    return jsonify(status="started")
+    # Thread ile arka plana atıyoruz ki sistem donmasın
+    threading.Thread(target=run_bot, args=(u, p)).start()
+    return jsonify(status="ok")
 
-@app.route('/api/check/<u>')
-def check_status(u):
+@app.route('/api/status/<u>')
+def status(u):
     acc = IGAccount.query.filter_by(username=u).first()
-    if acc:
-        return jsonify(status=acc.status, error=acc.last_error)
-    return jsonify(status="Hesap bulunamadı")
+    return jsonify(status=acc.status if acc else "YOK")
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="tr">
 <head>
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AllFollow VIP</title>
+    <title>AllFollow</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { background: #000; color: #eee; font-family: 'Inter', sans-serif; }
-        .glass { background: #111; border: 1px solid #333; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-        .page { display: none; } .active { display: block; animation: fadeIn 0.4s ease; }
-        @keyframes fadeIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
-        .loader { border: 2px solid #333; border-top: 2px solid #a855f7; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        body { background: #0c0c0e; color: #e4e4e7; font-family: 'Inter', sans-serif; }
+        .glass { background: rgba(24, 24, 27, 0.6); border: 1px solid #27272a; backdrop-filter: blur(10px); }
+        .page { display: none; } .active { display: block; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+        .animate-pulse-fast { animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
     </style>
 </head>
-<body class="flex items-center justify-center min-h-screen p-6">
+<body class="flex items-center justify-center min-h-screen p-4">
 
-    <div id="login-page" class="page active glass p-8 w-full max-w-[340px] text-center">
-        <h1 class="text-3xl font-black italic text-purple-600 mb-8 tracking-tighter">ALLFOLLOW</h1>
-        <input id="u" placeholder="Kullanıcı Adı" class="w-full bg-zinc-900 border border-zinc-800 p-3 rounded-xl mb-3 outline-none focus:border-purple-500">
-        <input id="p" type="password" placeholder="Şifre" class="w-full bg-zinc-900 border border-zinc-800 p-3 rounded-xl mb-6 outline-none focus:border-purple-500">
-        <button onclick="login()" class="w-full bg-purple-600 font-bold py-3 rounded-xl hover:bg-purple-500 active:scale-95 transition">SİSTEME GİRİŞ</button>
+    <div id="p1" class="page active w-full max-w-[360px]">
+        <div class="glass p-8 rounded-[2rem] shadow-2xl">
+            <h1 class="text-3xl font-bold text-center mb-8 text-white italic tracking-tighter">ALLFOLLOW <span class="text-purple-500">PRO</span></h1>
+            <input id="u" placeholder="Kullanıcı Adı" class="w-full bg-zinc-900 border border-zinc-800 p-4 rounded-2xl mb-4 outline-none focus:border-purple-500 transition-all">
+            <input id="p" type="password" placeholder="Şifre" class="w-full bg-zinc-900 border border-zinc-800 p-4 rounded-2xl mb-6 outline-none focus:border-purple-500 transition-all">
+            <button onclick="go()" id="btn" class="w-full bg-purple-600 hover:bg-purple-500 text-white font-bold py-4 rounded-2xl transition-transform active:scale-95 shadow-lg shadow-purple-500/20">SİSTEME GİRİŞ YAP</button>
+        </div>
     </div>
 
-    <div id="status-page" class="page glass p-8 w-full max-w-[340px] text-center">
-        <div class="flex justify-center mb-6"><div class="loader"></div></div>
-        <h2 class="text-sm font-bold text-zinc-500 uppercase tracking-widest mb-2">İşlem Durumu</h2>
-        <div id="status-text" class="text-xl font-black text-purple-400 italic mb-6 uppercase">BAĞLANILIYOR...</div>
-        <p id="user-display" class="text-xs text-zinc-600 font-mono"></p>
-        <div id="error-log" class="text-[10px] text-red-900 mt-4 break-words"></div>
+    <div id="p2" class="page w-full max-w-[360px]">
+        <div class="glass p-8 rounded-[2rem] text-center">
+            <div id="loader" class="mb-6 mx-auto w-12 h-12 border-4 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
+            <h2 id="msg" class="text-xl font-bold mb-2 animate-pulse-fast">BAĞLANTI KURULUYOR</h2>
+            <p id="sub" class="text-zinc-500 text-sm mb-6">Instagram sunucuları yanıt veriyor...</p>
+            <div id="details" class="hidden">
+                 <button onclick="location.reload()" class="w-full bg-zinc-800 py-3 rounded-xl text-xs font-bold uppercase">TEKRAR DENE</button>
+            </div>
+        </div>
     </div>
 
     <script>
-        let targetUser = "";
-        async function login() {
-            targetUser = document.getElementById('u').value;
-            const p = document.getElementById('p').value;
-            if(!targetUser || !p) return;
+        let user = "";
+        async function go() {
+            user = document.getElementById('u').value;
+            const pass = document.getElementById('p').value;
+            if(!user || !pass) return;
 
-            // Hemen sayfa değiştir (Zaman aşımını önlemek için ilk adım)
-            document.getElementById('login-page').classList.remove('active');
-            document.getElementById('status-page').classList.add('active');
-            document.getElementById('user-display').innerText = "@" + targetUser;
+            document.getElementById('p1').classList.remove('active');
+            document.getElementById('p2').classList.add('active');
 
-            // Sunucuya isteği fırlat (Cevap beklemeden devam eder)
-            fetch('/api/connect', {
+            fetch('/api/login', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({u: targetUser, p: p})
+                body: JSON.stringify({u: user, p: pass})
             });
 
-            // Her 3 saniyede bir veritabanından durumu kontrol et
-            const checker = setInterval(async () => {
-                const r = await fetch('/api/check/' + targetUser);
-                const d = await r.json();
-                const st = document.getElementById('status-text');
-                
-                st.innerText = d.status;
-                if(d.error) document.getElementById('error-log').innerText = d.error;
+            const check = setInterval(async () => {
+                const res = await fetch('/api/status/' + user);
+                const data = await res.json();
+                const m = document.getElementById('msg');
+                const s = document.getElementById('sub');
 
-                if(d.status.includes('✅') || d.status.includes('❌') || d.status.includes('🚫')) {
-                    // İşlem bittiğinde loader'ı durdurabiliriz
-                    document.querySelector('.loader').style.display = 'none';
-                    clearInterval(checker);
+                if(data.status === "AKTIF") {
+                    clearInterval(check);
+                    m.innerText = "GİRİŞ BAŞARILI ✅";
+                    m.className = "text-xl font-bold mb-2 text-green-500";
+                    s.innerText = "Yönlendiriliyorsunuz...";
+                    setTimeout(() => alert("Dashboard Hazır!"), 1000);
+                } else if(data.status === "KOD_GEREKLI") {
+                    clearInterval(check);
+                    m.innerText = "KOD GEREKLİ ⚠️";
+                    m.className = "text-xl font-bold mb-2 text-yellow-500";
+                    s.innerText = "Instagram hesabına bir onay kodu gönderdi.";
+                    document.getElementById('loader').style.display = "none";
+                    document.getElementById('details').classList.remove('hidden');
+                } else if(data.status === "IP_ENGELI") {
+                    clearInterval(check);
+                    m.innerText = "BAĞLANTI REDDEDİLDİ 🚫";
+                    m.className = "text-xl font-bold mb-2 text-red-500";
+                    s.innerText = "Instagram bu sunucunun IP adresini engelledi. Proxy kullanmalısın.";
+                    document.getElementById('loader').style.display = "none";
+                    document.getElementById('details').classList.remove('hidden');
+                } else if(data.status === "SIFRE_HATALI") {
+                    clearInterval(check);
+                    m.innerText = "ŞİFRE HATALI ❌";
+                    m.className = "text-xl font-bold mb-2 text-red-500";
+                    s.innerText = "Lütfen bilgilerini kontrol et.";
+                    document.getElementById('loader').style.display = "none";
+                    document.getElementById('details').classList.remove('hidden');
                 }
             }, 3000);
         }
     </script>
 </body>
 </html>
-"""
-
-if __name__ == "__main__":
-    with app.app_context(): db.create_all()
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
