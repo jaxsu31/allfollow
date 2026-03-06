@@ -1,13 +1,17 @@
 import os
 import time
 import random
+import logging
 from flask import Flask, request, jsonify, render_template_string
 from flask_sqlalchemy import SQLAlchemy
 from instagrapi import Client
-from instagrapi.exceptions import ChallengeRequired, BadPassword, LoginRequired
+from instagrapi.exceptions import ChallengeRequired, BadPassword, LoginRequired, FeedbackRequired
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Render loglarında detaylı görmek için loglamayı açıyoruz
+logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL")
@@ -15,7 +19,8 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-# Bağlantı sorunlarını minimuma indirmek için proxy şimdilik None
+# DİKKAT: Eğer elinde sağlam bir proxy yoksa burayı None bırak. 
+# Kalitesiz proxy "Bağlantı Hatası"nın 1 numaralı sebebidir.
 PROXY_URL = None 
 
 active_sessions = {}
@@ -36,34 +41,33 @@ def login_api():
     u, p = data.get('u'), data.get('p')
     cl = Client()
     
-    # Giriş şansını artırmak için rastgele gecikme ve cihaz simülasyonu
+    # Instagram'ı kandırmak için en güncel cihaz ayarları
     cl.set_device_settings({
         "app_version": "269.0.0.18.75",
         "android_version": 26,
         "android_release": "8.0.0",
         "dpi": "480dpi",
         "resolution": "1080x1920",
-        "manufacturer": "samsung",
-        "device": "SM-G950F",
-        "model": "dreamqlte",
-        "cpu": "samsungexynos8895",
+        "manufacturer": "Xiaomi",
+        "device": "chiron",
+        "model": "Mi MIX 2",
+        "cpu": "qcom",
         "version_code": "442431182"
     })
-    
+
     if PROXY_URL:
-        try:
-            cl.set_proxy(PROXY_URL)
-        except:
-            pass
-            
+        cl.set_proxy(PROXY_URL)
+        logging.info(f"Proxy kullanılıyor: {PROXY_URL}")
+
     active_sessions[u] = cl
     
     try:
-        print(f"DEBUG: {u} için giriş deneniyor...")
-        # Instagram'ın botu anlamaması için kısa bir bekleme
-        time.sleep(random.uniform(1, 3))
+        logging.info(f"Giriş deneniyor: {u}")
+        # İnsan gibi davranmak için rastgele bekleme
+        time.sleep(random.uniform(2, 4))
         
         if cl.login(u, p):
+            logging.info(f"Giriş Başarılı: {u}")
             acc = IGAccount.query.filter_by(username=u).first()
             if not acc:
                 acc = IGAccount(username=u, password=p, status="AKTIF")
@@ -76,15 +80,20 @@ def login_api():
     except BadPassword:
         return jsonify(status="error", message="Şifre Yanlış! Lütfen kontrol edin.")
     except ChallengeRequired:
+        logging.warning("Challenge (Onay) gerekiyor.")
         return jsonify(status="challenge", next_step="verify")
+    except FeedbackRequired:
+        return jsonify(status="error", message="Instagram geçici engel koydu. 30 dk sonra deneyin.")
     except Exception as e:
         err_msg = str(e).lower()
-        print(f"LOG: {err_msg}")
-        if "checkpoint" in err_msg or "challenge" in err_msg:
+        logging.error(f"Hata Detayı: {err_msg}")
+        
+        if "checkpoint" in err_msg:
             return jsonify(status="challenge", next_step="verify")
-        if "feedback_required" in err_msg:
-            return jsonify(status="error", message="Instagram çok fazla deneme yaptığınızı algıladı. 15 dk bekleyin.")
-        return jsonify(status="error", message="Bağlantı Reddildi. (IP Engeli)")
+        if "proxy" in err_msg:
+            return jsonify(status="error", message="Proxy hatası! Proxy ayarlarını kontrol et.")
+        
+        return jsonify(status="error", message="Instagram Bağlantıyı Reddetti. (Sunucu IP'si Engelli olabilir)")
 
 @app.route('/api/verify', methods=['POST'])
 def verify_api():
@@ -99,10 +108,10 @@ def verify_api():
             acc.status = "AKTIF"
             db.session.commit()
         return jsonify(status="success", next_step="dashboard")
-    except Exception:
-        return jsonify(status="error", message="Kod hatalı veya süresi doldu.")
+    except Exception as e:
+        return jsonify(status="error", message="Kod hatalı: " + str(e))
 
-# --- UI (MODERN VE HATASIZ) ---
+# --- UI (SADE VE GÜÇLÜ) ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="tr">
@@ -111,47 +120,40 @@ HTML_TEMPLATE = """
     <title>AllFollow</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { background: #000; color: #fff; font-family: sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
-        .glass { background: #121212; border: 1px solid #333; padding: 2rem; border-radius: 1.5rem; width: 100%; max-width: 350px; text-align: center; }
+        body { background: #000; color: #fff; display: flex; align-items: center; justify-content: center; min-height: 100vh; font-family: sans-serif; }
+        .box { background: #111; border: 1px solid #333; padding: 2rem; border-radius: 1.5rem; width: 100%; max-width: 320px; }
         .page { display: none; } .active { display: block; }
-        input { width: 100%; background: #1f1f1f; border: 1px solid #333; padding: 0.8rem; border-radius: 0.75rem; color: #fff; margin-bottom: 1rem; outline: none; font-size: 14px; }
-        input:focus { border-color: #a855f7; }
-        button { width: 100%; background: #a855f7; color: #fff; font-weight: bold; padding: 0.8rem; border-radius: 0.75rem; border: none; cursor: pointer; transition: 0.3s; }
-        button:disabled { opacity: 0.5; }
-        .loader { border: 2px solid #f3f3f3; border-top: 2px solid #a855f7; border-radius: 50%; width: 16px; height: 16px; animation: spin 1s linear infinite; display: inline-block; vertical-align: middle; margin-right: 8px; }
+        input { width: 100%; background: #222; border: 1px solid #444; padding: 0.8rem; border-radius: 0.5rem; color: #fff; margin-bottom: 1rem; outline: none; }
+        button { width: 100%; background: #a855f7; color: #fff; font-weight: bold; padding: 0.8rem; border-radius: 0.5rem; border: none; cursor: pointer; }
+        .loader { border: 2px solid #f3f3f3; border-top: 2px solid #a855f7; border-radius: 50%; width: 14px; height: 14px; animation: spin 1s linear infinite; display: inline-block; margin-right: 5px; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
-
-    <div id="login-page" class="page active glass">
-        <h1 style="color: #a855f7; font-weight: 900; font-style: italic; font-size: 24px; margin-bottom: 1.5rem;">ALLFOLLOW</h1>
+    <div id="login-page" class="page active box">
+        <h2 style="color:#a855f7; margin-bottom:1.5rem; font-weight:900;">ALLFOLLOW</h2>
         <input id="u" placeholder="Kullanıcı Adı">
         <input id="p" type="password" placeholder="Şifre">
-        <button onclick="handleLogin()" id="btn">GİRİŞ YAP</button>
-        <p id="err" style="color: #ef4444; font-size: 11px; margin-top: 1rem; font-weight: bold;"></p>
+        <button onclick="doLogin()" id="btn">GİRİŞ YAP</button>
+        <p id="err" style="color:#ff4444; font-size:11px; margin-top:10px;"></p>
     </div>
 
-    <div id="verify-page" class="page glass">
-        <h2 style="color: #f59e0b; margin-bottom: 1rem;">Güvenlik Kodu</h2>
-        <p style="font-size: 12px; color: #888; margin-bottom: 1.5rem;">Instagram'dan gelen kodu girin.</p>
-        <input id="vcode" placeholder="000000" style="text-align: center; font-size: 24px; letter-spacing: 5px;">
-        <button onclick="handleVerify()" id="vbtn" style="background: #f59e0b;">ONAYLA</button>
+    <div id="verify-page" class="page box">
+        <h2 style="color:#f59e0b; margin-bottom:1rem;">Kod Onayı</h2>
+        <input id="vcode" placeholder="000000" style="text-align:center; letter-spacing:4px;">
+        <button onclick="doVerify()" id="vbtn" style="background:#f59e0b;">ONAYLA</button>
     </div>
 
-    <div id="dashboard-page" class="page glass" style="border-top: 4px solid #22c55e;">
-        <h2 style="color: #22c55e; margin-bottom: 0.5rem;">Giriş Başarılı ✅</h2>
-        <p id="final-user" style="font-weight: bold; margin-bottom: 1.5rem;"></p>
-        <button onclick="location.reload()" style="background: #333;">ÇIKIŞ YAP</button>
+    <div id="dashboard-page" class="page box" style="border-top: 4px solid #22c55e;">
+        <h2 style="color:#22c55e;">Başarılı! ✅</h2>
+        <p id="usr" style="margin-top:10px; font-weight:bold;"></p>
     </div>
 
     <script>
-        async function handleLogin() {
+        async function doLogin() {
             const u = document.getElementById('u').value, p = document.getElementById('p').value;
             const btn = document.getElementById('btn'), err = document.getElementById('err');
-            if(!u || !p) return;
             btn.disabled = true; btn.innerHTML = '<div class="loader"></div> BAĞLANIYOR...';
-            err.innerText = "";
             try {
                 const r = await fetch('/api/login', {
                     method: 'POST',
@@ -160,8 +162,8 @@ HTML_TEMPLATE = """
                 });
                 const d = await r.json();
                 if(d.status === "success") {
+                    document.getElementById('usr').innerText = "@" + u;
                     showPage('dashboard-page');
-                    document.getElementById('final-user').innerText = "@" + u;
                 } else if(d.status === "challenge") {
                     showPage('verify-page');
                 } else {
@@ -174,10 +176,10 @@ HTML_TEMPLATE = """
             }
         }
 
-        async function handleVerify() {
+        async function doVerify() {
             const code = document.getElementById('vcode').value, u = document.getElementById('u').value;
             const btn = document.getElementById('vbtn');
-            btn.disabled = true; btn.innerText = "ONAYLANIYOR...";
+            btn.disabled = true;
             const r = await fetch('/api/verify', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -186,11 +188,7 @@ HTML_TEMPLATE = """
             const d = await r.json();
             if(d.status === "success") {
                 showPage('dashboard-page');
-                document.getElementById('final-user').innerText = "@" + u;
-            } else {
-                alert(d.message);
-                btn.disabled = false; btn.innerText = "ONAYLA";
-            }
+            } else { alert(d.message); btn.disabled = false; }
         }
 
         function showPage(id) {
