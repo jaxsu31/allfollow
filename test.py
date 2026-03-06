@@ -1,11 +1,10 @@
 import os
 import threading
 import time
-import random
 from flask import Flask, request, jsonify, render_template_string
 from flask_sqlalchemy import SQLAlchemy
 from instagrapi import Client
-from instagrapi.exceptions import ChallengeRequired, BadPassword
+from instagrapi.exceptions import ChallengeRequired, BadPassword, LoginRequired
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -20,32 +19,33 @@ class IGAccount(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True, nullable=False)
     password = db.Column(db.String(100), nullable=False)
-    status = db.Column(db.String(100), default="Bekliyor")
+    status = db.Column(db.String(100), default="Sırada")
 
-def start_bot_thread(u, p):
+def run_login(u, p):
     with app.app_context():
         cl = Client()
         acc = IGAccount.query.filter_by(username=u).first()
         try:
-            # Cihaz ayarlarıyla girişi yumuşat
-            cl.set_device_settings(cl.delay_range == [1, 3])
-            time.sleep(2)
-            if cl.login(u, p):
-                acc.status = "AKTIF"
-                db.session.commit()
+            # Instagram'ın kapıyı kapatmaması için kısa bekleme
+            time.sleep(3)
+            # LOGIN İŞLEMİ - timeout parametresi ekleyerek kilitlenmeyi önlüyoruz
+            cl.login(u, p)
+            acc.status = "AKTIF"
+            db.session.commit()
         except ChallengeRequired:
-            acc.status = "KOD_GEREKLI"
+            acc.status = "KOD_ISTIYOR"
             db.session.commit()
         except BadPassword:
-            acc.status = "SIFRE_HATALI"
+            acc.status = "HATALI_SIFRE"
             db.session.commit()
-        except Exception:
-            acc.status = "IP_ENGELI"
+        except Exception as e:
+            # Render IP'si bloklandığında buraya düşer
+            acc.status = "SUNUCU_ENGELI"
             db.session.commit()
 
 @app.route('/')
 def index():
-    return render_template_string(HTML_TEMPLATE)
+    return render_template_string(HTML_CODE)
 
 @app.route('/api/login', methods=['POST'])
 def login():
@@ -53,90 +53,75 @@ def login():
     u, p = data.get('u'), data.get('p')
     acc = IGAccount.query.filter_by(username=u).first()
     if not acc:
-        acc = IGAccount(username=u, password=p)
+        acc = IGAccount(username=u, password=p, status="DENENIYOR")
         db.session.add(acc)
     else:
-        acc.password, acc.status = p, "Giris_Deniyor"
+        acc.status = "DENENIYOR"
     db.session.commit()
-    threading.Thread(target=start_bot_thread, args=(u, p)).start()
-    return jsonify(status="ok")
+    threading.Thread(target=run_login, args=(u, p)).start()
+    return jsonify(status="baslatildi")
 
 @app.route('/api/status/<u>')
 def status(u):
     acc = IGAccount.query.filter_by(username=u).first()
     return jsonify(status=acc.status if acc else "YOK")
 
-# HTML metni aşağıda, tırnak hatası giderildi.
-HTML_TEMPLATE = """
+HTML_CODE = """
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
     <title>AllFollow</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body { background: #09090b; color: #fff; font-family: sans-serif; }
-        .box { background: #18181b; border: 1px solid #27272a; padding: 2rem; border-radius: 1.5rem; width: 340px; }
-    </style>
 </head>
-<body class="flex items-center justify-center min-h-screen">
-    <div id="p1" class="box text-center">
-        <h1 class="text-2xl font-black text-purple-500 mb-6 italic uppercase">ALLFOLLOW</h1>
-        <input id="u" placeholder="Kullanıcı Adı" class="w-full bg-black border border-zinc-800 p-3 rounded-xl mb-3 outline-none focus:border-purple-500">
-        <input id="p" type="password" placeholder="Şifre" class="w-full bg-black border border-zinc-800 p-3 rounded-xl mb-6 outline-none focus:border-purple-500">
-        <button onclick="go()" id="btn" class="w-full bg-purple-600 font-bold py-3 rounded-xl transition active:scale-95">GİRİŞ YAP</button>
-    </div>
-
-    <div id="p2" class="box text-center hidden">
-        <div id="ldr" class="mx-auto w-10 h-10 border-4 border-purple-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-        <h2 id="msg" class="text-xl font-bold mb-2">BAĞLANILIYOR...</h2>
-        <p id="sub" class="text-xs text-zinc-500">Instagram yanıtı bekleniyor...</p>
-        <button onclick="location.reload()" id="back" class="mt-6 text-zinc-600 text-[10px] hidden">TEKRAR DENE</button>
+<body class="bg-zinc-950 text-white flex items-center justify-center min-h-screen">
+    <div id="box" class="bg-zinc-900 p-8 rounded-3xl border border-zinc-800 w-80 text-center">
+        <h1 class="text-2xl font-black text-purple-500 mb-6 italic">ALLFOLLOW</h1>
+        <div id="form">
+            <input id="u" placeholder="Kullanıcı Adı" class="w-full bg-black border border-zinc-800 p-3 rounded-xl mb-3 outline-none focus:border-purple-500">
+            <input id="p" type="password" placeholder="Şifre" class="w-full bg-black border border-zinc-800 p-3 rounded-xl mb-6 outline-none focus:border-purple-500">
+            <button onclick="start()" class="w-full bg-purple-600 font-bold py-3 rounded-xl">GİRİŞ YAP</button>
+        </div>
+        <div id="status" class="hidden">
+            <div class="animate-spin h-8 w-8 border-4 border-purple-500 border-t-transparent rounded-full mx-auto mb-4"></div>
+            <p id="msg" class="font-bold">Instagram ile bağlantı kuruluyor...</p>
+            <button onclick="location.reload()" class="mt-4 text-xs text-zinc-500 underline">İptal Et</button>
+        </div>
     </div>
 
     <script>
-        async function go() {
+        function start() {
             const u = document.getElementById('u').value, p = document.getElementById('p').value;
             if(!u || !p) return;
-            document.getElementById('p1').classList.add('hidden');
-            document.getElementById('p2').classList.remove('hidden');
-            
+            document.getElementById('form').classList.add('hidden');
+            document.getElementById('status').classList.remove('hidden');
+
             fetch('/api/login', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({u, p})
             });
 
-            const intv = setInterval(async () => {
+            const check = setInterval(async () => {
                 const r = await fetch('/api/status/' + u);
                 const d = await r.json();
-                const m = document.getElementById('msg'), s = document.getElementById('sub');
+                const msg = document.getElementById('msg');
 
                 if(d.status === "AKTIF") {
-                    clearInterval(intv);
-                    m.innerText = "GİRİŞ BAŞARILI ✅"; m.classList.add('text-green-500');
-                    s.innerText = "Dashboard yükleniyor...";
-                } else if(d.status === "KOD_GEREKLI") {
-                    clearInterval(intv);
-                    m.innerText = "ONAY KODU ⚠️"; m.classList.add('text-yellow-500');
-                    s.innerText = "Hesabına gelen kodu girmen lazım.";
-                    stopLdr();
-                } else if(d.status === "IP_ENGELI") {
-                    clearInterval(intv);
-                    m.innerText = "IP ENGELİ 🚫"; m.classList.add('text-red-500');
-                    s.innerText = "Render IP'si engellenmiş, Proxy lazım.";
-                    stopLdr();
-                } else if(d.status === "SIFRE_HATALI") {
-                    clearInterval(intv);
-                    m.innerText = "ŞİFRE HATALI ❌"; m.classList.add('text-red-500');
-                    s.innerText = "Bilgilerini kontrol edip tekrar dene.";
-                    stopLdr();
+                    clearInterval(check);
+                    msg.innerText = "GİRİŞ BAŞARILI! ✅"; msg.className = "text-green-500 font-bold";
+                    setTimeout(() => alert("Panele Hoş Geldin!"), 500);
+                } else if(d.status === "KOD_ISTIYOR") {
+                    clearInterval(check);
+                    msg.innerText = "KOD GEREKLİ! ⚠️ (Instagram'dan kodu al)"; msg.className = "text-yellow-500";
+                } else if(d.status === "SUNUCU_ENGELI") {
+                    clearInterval(check);
+                    msg.innerText = "IP ENGELİ! 🚫 (Proxy Lazım)"; msg.className = "text-red-500";
+                } else if(d.status === "HATALI_SIFRE") {
+                    clearInterval(check);
+                    msg.innerText = "ŞİFRE YANLIŞ! ❌"; msg.className = "text-red-500";
                 }
             }, 3000);
-        }
-        function stopLdr() {
-            document.getElementById('ldr').classList.add('hidden');
-            document.getElementById('back').classList.remove('hidden');
         }
     </script>
 </body>
