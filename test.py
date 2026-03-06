@@ -51,7 +51,7 @@ def save_account(username, data):
         }
 
 # GELİŞMİŞ LOGIN SCRIPT - Challenge algılama iyileştirildi
-LOGIN_SCRIPT = r'''
+LOGIN_SCRIPT = '''
 import sys
 import json
 import time
@@ -67,7 +67,7 @@ log_f = open(LOG_FILE, "w", buffering=1)
 def log(msg):
     timestamp = time.strftime('%H:%M:%S')
     line = f"{timestamp} | {msg}"
-    log_f.write(line + "\n")
+    log_f.write(line + "\\n")
     log_f.flush()
 
 log("=" * 50)
