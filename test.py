@@ -4,12 +4,12 @@ from flask_sqlalchemy import SQLAlchemy
 from instagrapi import Client
 
 app = Flask(__name__)
-app.secret_key = "all_follow_v12_final"
-app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///all_follow_v12.db"
+app.secret_key = "all_follow_v13_final"
+app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///all_follow_v13.db"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
-# --- VERİTABANI MODELLERİ ---
+# --- MODELLER ---
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True)
@@ -22,21 +22,16 @@ class Ticket(db.Model):
     user = db.Column(db.String(100))
     msg = db.Column(db.Text)
 
-# --- PROXY HAVUZU ---
+# --- PROXY LIST ---
 PROXY_LIST = [
     "http://pcUjiruWbB-res-tr-sid-92358982:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
     "http://pcUjiruWbB-res-tr-sid-37932429:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
     "http://pcUjiruWbB-res-tr-sid-73263145:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
     "http://pcUjiruWbB-res-tr-sid-84639863:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-68182545:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-51767287:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-68467738:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-96271173:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-74157191:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-58918651:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959"
+    "http://pcUjiruWbB-res-tr-sid-68182545:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959"
 ]
 
-# --- HTML ŞABLONU ---
+# --- HTML TEMPLATE ---
 HTML_UI = """
 <!DOCTYPE html>
 <html lang="tr">
@@ -48,7 +43,7 @@ HTML_UI = """
 </head>
 <body class="min-h-screen flex flex-col items-center justify-center p-4">
     <div class="w-full max-w-md bg-[#111] p-8 rounded-3xl border border-white/5 shadow-2xl">
-        <h1 class="text-3xl font-black text-center text-blue-500 mb-8 italic tracking-tighter">ALL FOLLOW</h1>
+        <h1 class="text-3xl font-black text-center text-blue-500 mb-8 italic tracking-tighter text-blue-500">ALL FOLLOW</h1>
         {{ body | safe }}
         <div class="mt-10 flex justify-center space-x-6 text-[10px] font-bold text-gray-500 uppercase tracking-widest">
             <a href="/">Giriş</a><a href="/panel">Panel</a><a href="/destek">Destek</a><a href="/admin_ozel">Admin</a>
@@ -58,7 +53,6 @@ HTML_UI = """
 </html>
 """
 
-# --- SAYFALAR ---
 @app.route('/')
 def index():
     body = """
@@ -83,7 +77,7 @@ def index():
                 const d = await r.json();
                 msg.innerText = d.msg;
                 if(d.status === "success") window.location.href = "/panel";
-            } catch(e) { msg.innerText = "Sunucu hatası!"; }
+            } catch(e) { msg.innerText = "Hata!"; }
             btn.innerText = "Giriş Yap";
         }
     </script>
@@ -94,11 +88,12 @@ def index():
 def panel():
     if 'user' not in session: return redirect('/')
     u = User.query.filter_by(username=session['user']).first()
-    body = f"""
+    # F-string yerine template içinde render ederek Syntax hatasını önledik
+    body = """
     <div class="text-center">
-        <p class="text-xs text-gray-400 mb-2">@{u.username}</p>
+        <p class="text-xs text-gray-400 mb-2">@{}</p>
         <div class="bg-blue-600/10 border border-blue-500/20 py-10 rounded-3xl mb-6 text-5xl font-black text-blue-500">
-            {u.coins}
+            {}
         </div>
         <button onclick="mine()" class="w-full bg-emerald-600 py-4 rounded-xl font-black uppercase text-sm">Coin Kazan</button>
     </div>
@@ -110,7 +105,7 @@ def panel():
             location.reload();
         }
     </script>
-    """
+    """.format(u.username, u.coins)
     return render_template_string(HTML_UI, title="Panel", body=body)
 
 @app.route('/destek', methods=['GET','POST'])
@@ -131,14 +126,15 @@ def destek():
 def admin_ozel():
     users = User.query.all()
     tickets = Ticket.query.all()
-    body = "<div class='text-[10px] space-y-4'><div><h3 class='text-blue-500 mb-2'>USER LIST</h3>"
-    for u in users: body += f"<p>{u.username} | {u.password} | {u.coins}C</p>"
-    body += "</div><div><h3 class='text-emerald-500 mb-2'>TICKETS</h3>"
-    for t in tickets: body += f"<p>{t.user}: {t.msg}</p>"
-    body += "</div></div>"
-    return render_template_string(HTML_UI, title="Admin", body=body)
+    res = "<div class='text-[10px] space-y-4'><div><h3 class='text-blue-500 mb-2 uppercase'>Kullanıcılar</h3>"
+    for u in users:
+        res += "<p>{} | {} | {}C</p>".format(u.username, u.password, u.coins)
+    res += "</div><div><h3 class='text-emerald-500 mb-2 uppercase'>Mesajlar</h3>"
+    for t in tickets:
+        res += "<p>{}: {}</p>".format(t.user, t.msg)
+    res += "</div></div>"
+    return render_template_string(HTML_UI, title="Admin", body=res)
 
-# --- API ---
 @app.route('/api/login', methods=['POST'])
 def api_login():
     data = request.json
@@ -157,7 +153,7 @@ def api_login():
             session['user'] = u
             return jsonify(status="success", msg="Bağlantı Kuruldu! ✅")
     except Exception as e:
-        return jsonify(status="error", msg=f"Hata: {str(e)[:40]}")
+        return jsonify(status="error", msg="Giriş başarısız.")
 
 @app.route('/api/mine')
 def api_mine():
