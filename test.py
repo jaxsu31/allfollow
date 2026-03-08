@@ -2,13 +2,11 @@ import os, random, time, uuid, json
 from flask import Flask, request, jsonify, session, render_template_string, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
 from instagrapi import Client
-# Hata isimlerini daha güvenli bir şekilde içe aktarıyoruz
-import instagrapi.exceptions as instahatalari 
 
-# --- 1. PROJE BAŞLATMA ---
+# --- 1. SİSTEM VE VERİTABANI AYARLARI ---
 app = Flask(__name__)
-app.secret_key = "all_follow_v26_final_fix"
-app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///all_follow_v26.db"
+app.secret_key = "all_follow_v27_full_fix"
+app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///all_follow_v27.db"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
@@ -44,7 +42,141 @@ PACKAGES = [
     {"n": "5000 Takipçi", "c": 40000}
 ]
 
-# --- 4. GİRİŞ MANTIĞI (HATA GİDERİLMİŞ) ---
+# --- 4. TASARIM ŞABLONLARI (HTML) ---
+LOGIN_HTML = """
+<!DOCTYPE html>
+<html>
+<head><title>AllFollow | Giriş</title><script src="https://cdn.tailwindcss.com"></script></head>
+<body class="bg-black text-white flex items-center justify-center min-h-screen">
+    <div class="w-full max-w-sm p-10 bg-zinc-900 rounded-[3rem] border border-white/5">
+        <h1 class="text-center font-black italic text-2xl mb-8">ALLFOLLOW<span class="text-teal-500">.</span></h1>
+        <div class="space-y-4">
+            <input id="u" placeholder="Kullanıcı Adı" class="w-full bg-black border border-white/10 p-5 rounded-2xl text-sm outline-none focus:border-teal-500 transition">
+            <input id="p" type="password" placeholder="Şifre" class="w-full bg-black border border-white/10 p-5 rounded-2xl text-sm outline-none focus:border-teal-500 transition">
+            <button onclick="login()" id="lbtn" class="w-full bg-teal-600 py-5 rounded-2xl font-black text-xs uppercase tracking-widest">Giriş Yap</button>
+            <p id="msg" class="text-center text-[10px] text-yellow-500 uppercase mt-4"></p>
+        </div>
+    </div>
+    <script>
+        async function login() {
+            const u = document.getElementById('u').value, p = document.getElementById('p').value;
+            const btn = document.getElementById('lbtn'), msg = document.getElementById('msg');
+            btn.disabled = true; btn.innerText = "BAĞLANILIYOR...";
+            const r = await fetch('/api/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({u, p}) });
+            const d = await r.json();
+            if(d.status === "success") window.location.href="/panel";
+            else { msg.innerText = d.msg; btn.disabled = false; btn.innerText = "Giriş Yap"; }
+        }
+    </script>
+</body>
+</html>
+"""
+
+PANEL_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <title>AllFollow | Panel</title>
+</head>
+<body class="bg-[#050505] text-zinc-400 pb-24">
+    <nav class="p-6 border-b border-white/5 flex justify-between bg-black sticky top-0 z-50">
+        <div class="flex items-center gap-3">
+            <h1 class="text-white font-black italic">ALLFOLLOW</h1>
+            <span class="text-[10px] bg-zinc-800 px-2 py-1 rounded">@{{ user.username }}</span>
+        </div>
+        <div class="flex items-center gap-4">
+            <div class="bg-zinc-900 px-3 py-1.5 rounded-xl border border-teal-500/20 text-white font-bold text-xs">
+                <i class="fa-solid fa-coins text-yellow-500 mr-2"></i>{{ user.coins }}
+            </div>
+            <a href="/logout" class="text-zinc-500"><i class="fa-solid fa-right-from-bracket"></i></a>
+        </div>
+    </nav>
+
+    <div class="flex overflow-x-auto bg-zinc-900/50 sticky top-[69px] z-40 border-b border-white/5">
+        <button onclick="tab('market')" class="px-6 py-4 text-[10px] font-bold uppercase">Market</button>
+        <button onclick="tab('support')" class="px-6 py-4 text-[10px] font-bold uppercase">Destek</button>
+        <button onclick="window.location.href='/logout'" class="px-6 py-4 text-[10px] font-bold uppercase text-teal-500">+ Hesap Ekle</button>
+    </div>
+
+    <main class="p-6 max-w-2xl mx-auto">
+        <div id="market" class="tab active grid grid-cols-1 gap-4">
+            {% for p in packages %}
+            <div onclick="buy('{{p.n}}', {{p.c}})" class="bg-zinc-900 p-6 rounded-3xl border border-white/5 hover:border-teal-500 cursor-pointer">
+                <h3 class="text-white font-bold">{{ p.n }}</h3>
+                <p class="text-xs text-teal-500 mt-1">{{ p.c }} Coin</p>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div id="support" class="tab hidden">
+            <textarea id="sup-msg" class="w-full bg-zinc-900 border border-white/10 rounded-2xl p-4 text-sm h-32 mb-4" placeholder="Mesajınızı yazın..."></textarea>
+            <button onclick="sendSupport()" class="w-full bg-teal-600 py-4 rounded-xl font-bold text-xs uppercase">Gönder</button>
+            <div class="mt-6 space-y-2">
+                {% for t in tickets %}
+                <div class="bg-zinc-900/30 p-4 rounded-xl border border-white/5">
+                    <p class="text-xs text-white">{{ t.message }}</p>
+                    {% if t.reply %}<p class="text-[10px] text-teal-500 mt-2 font-bold italic">Cevap: {{ t.reply }}</p>{% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </main>
+
+    <script>
+        function tab(id) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.add('hidden'));
+            document.getElementById(id).classList.remove('hidden');
+        }
+        async function buy(p, c) {
+            const target = prompt(p + " için kullanıcı adı:");
+            if(!target) return;
+            const r = await fetch('/api/order', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({package:p, cost:c, target:target}) });
+            const d = await r.json(); alert(d.msg); if(d.status==='success') location.reload();
+        }
+        async function sendSupport() {
+            const msg = document.getElementById('sup-msg').value;
+            await fetch('/api/support', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({msg}) });
+            location.reload();
+        }
+    </script>
+</body>
+</html>
+"""
+
+ADMIN_LOGIN_HTML = """<body style="background:#000; color:#fff; display:flex; align-items:center; justify-content:center; height:100vh;"><form action="/api/admin-login" method="post" style="background:#111; padding:30px; border-radius:20px;"><input name="u" placeholder="Admin" style="display:block; margin-bottom:10px; padding:10px;"><input name="p" type="password" placeholder="Sifre" style="display:block; margin-bottom:10px; padding:10px;"><button style="width:100%; padding:10px; background:teal; color:#fff;">Giris</button></form></body>"""
+
+ADMIN_DASH_HTML = """
+<!DOCTYPE html>
+<html>
+<head><script src="https://cdn.tailwindcss.com"></script></head>
+<body class="bg-black text-white p-10">
+    <h1 class="text-2xl font-bold mb-6 text-teal-500">Siparişler & Destek</h1>
+    <div class="grid grid-cols-2 gap-10">
+        <div class="bg-zinc-900 p-6 rounded-2xl">
+            <h2 class="font-bold mb-4">Siparişler</h2>
+            {% for o in orders %}<p class="text-[10px] border-b border-white/5 py-1">{{o.username}} -> {{o.target_username}} ({{o.package}})</p>{% endfor %}
+        </div>
+        <div class="bg-zinc-900 p-6 rounded-2xl">
+            <h2 class="font-bold mb-4">Destek</h2>
+            {% for t in tickets %}
+            <div class="mb-4 text-[10px]">
+                <p>{{t.username}}: {{t.message}}</p>
+                <form action="/api/admin-reply" method="post" class="flex gap-2">
+                    <input name="id" type="hidden" value="{{t.id}}">
+                    <input name="reply" placeholder="Cevap..." class="bg-black text-white p-1 flex-1">
+                    <button class="bg-teal-600 px-2 rounded">Gonder</button>
+                </form>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+# --- 5. ROTALAR VE MANTIK ---
 @app.route('/api/login', methods=['POST'])
 def api_login():
     data = request.json
@@ -55,7 +187,6 @@ def api_login():
     if existing_user and existing_user.device_data:
         cl.set_settings(json.loads(existing_user.device_data))
     else:
-        # Cihaz simülasyonu (Hatay/Antakya bölgesi uyumlu)
         cl.set_device({"app_version": "269.0.0.18.75", "android_version": 26, "device": "TECNO KH7n", "cpu": "mt6765"})
         cl.set_locale("tr_TR")
         cl.set_country("TR")
@@ -64,11 +195,10 @@ def api_login():
         cl.login(u, p)
         login_ok = True
     except Exception as e:
-        err_str = str(e).lower()
-        # Challenge veya Checkpoint durumlarını string olarak kontrol ediyoruz (En güvenli yol)
-        if "challenge" in err_str or "checkpoint" in err_str or "confirm" in err_str:
-            return jsonify(status="error", msg="Instagram'ı aç ve 'BENDİM' butonuna bas. Sonra tekrar buraya gelip Giriş Yap de!")
-        return jsonify(status="error", msg="Bağlantı engellendi veya şifre yanlış.")
+        err = str(e).lower()
+        if "challenge" in err or "checkpoint" in err:
+            return jsonify(status="error", msg="Instagram'dan 'BENDİM' onayını verip tekrar deneyin.")
+        return jsonify(status="error", msg="Giriş başarısız.")
 
     if login_ok:
         if not existing_user:
@@ -78,7 +208,6 @@ def api_login():
         db.session.commit()
         return jsonify(status="success")
 
-# --- 5. DİĞER FONKSİYONLAR VE TASARIMLAR ---
 @app.route('/')
 def index():
     if 'user' in session: return redirect(url_for('panel'))
@@ -106,10 +235,9 @@ def place_order():
 @app.route('/api/support', methods=['POST'])
 def api_support():
     msg = request.json.get('msg')
-    new_t = Ticket(username=session['user'], message=msg)
-    db.session.add(new_t)
+    db.session.add(Ticket(username=session['user'], message=msg))
     db.session.commit()
-    return jsonify(status="success", msg="Mesaj iletildi!")
+    return jsonify(status="success")
 
 @app.route('/logout')
 def logout():
@@ -117,36 +245,25 @@ def logout():
     return redirect('/')
 
 @app.route('/admin')
-def admin_gate():
-    return render_template_string(ADMIN_LOGIN_HTML)
+def admin_gate(): return render_template_string(ADMIN_LOGIN_HTML)
 
 @app.route('/api/admin-login', methods=['POST'])
 def api_admin_login():
     if request.form.get('u') == 'admin123' and request.form.get('p') == 'admin':
         session['admin_logged_in'] = True
         return redirect('/admin/dashboard')
-    return "Hatalı Giriş!"
+    return "Hatalı Giriş"
 
 @app.route('/admin/dashboard')
 def admin_dashboard():
     if not session.get('admin_logged_in'): return redirect('/admin')
-    orders = Order.query.all()
-    tickets = Ticket.query.all()
-    return render_template_string(ADMIN_DASH_HTML, orders=orders, tickets=tickets)
+    return render_template_string(ADMIN_DASH_HTML, orders=Order.query.all(), tickets=Ticket.query.all())
 
 @app.route('/api/admin-reply', methods=['POST'])
 def admin_reply():
-    tid = request.form.get('id')
-    rep = request.form.get('reply')
-    ticket = Ticket.query.get(tid)
-    if ticket:
-        ticket.reply = rep
-        db.session.commit()
+    t = Ticket.query.get(request.form.get('id'))
+    if t: t.reply = request.form.get('reply'); db.session.commit()
     return redirect('/admin/dashboard')
-
-# --- TASARIM ŞABLONLARI ---
-# (Buraya önceki adımda verdiğim LOGIN_HTML, PANEL_HTML ve ADMIN_DASH_HTML kodlarını ekleyebilirsin)
-# Not: Tasarımlar değişmediği için alanı kalabalıklaştırmamak adına özet geçtim.
 
 if __name__ == "__main__":
     with app.app_context(): db.create_all()
