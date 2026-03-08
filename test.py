@@ -9,180 +9,173 @@ app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///all_follow_v17.db"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
-# --- 1. PROXY LİSTESİ (TÜM LİSTENİ BURAYA EKLE) ---
-PROXY_LIST = [
-    "http://pcUjiruWbB-res-tr-sid-92358982:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-37932429:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    # ... Diğer 48 proxy'ni buraya virgülle ayırarak ekleyebilirsin
-]
-
-# --- 2. VERİTABANI MODELLERİ ---
+# --- VERİTABANI MODELLERİ ---
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True)
     password = db.Column(db.String(100))
     coins = db.Column(db.Integer, default=800)
     ref_code = db.Column(db.String(20), unique=True)
-    last_daily_bonus = db.Column(db.String(20), default="") # YYYY-MM-DD formatında
+    last_daily_bonus = db.Column(db.String(20), default="")
     is_following_official = db.Column(db.Boolean, default=False)
 
 class Order(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100))
     package = db.Column(db.String(100))
+    cost = db.Column(db.Integer)
     timestamp = db.Column(db.DateTime, default=db.func.now())
 
-# --- 3. DASHBOARD TASARIMI (SEKMELİ YAPI) ---
-PANEL_HTML = """
+# --- PROXY LİSTESİ (Örnek - Buraya 50 IP'ni ekleyebilirsin) ---
+PROXY_LIST = [
+    "http://pcUjiruWbB-res-tr-sid-92358982:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-37932429:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959"
+]
+
+# --- HTML TASARIMLARI ---
+
+INDEX_HTML = """
 <!DOCTYPE html>
-<html lang="tr">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <title>AllFollow | Dashboard</title>
-    <style>
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-        .tab-btn.active { border-bottom: 2px solid #14b8a6; color: white; }
-    </style>
-</head>
-<body class="bg-[#050505] text-zinc-400 font-sans pb-24">
-
-    <nav class="p-6 border-b border-white/5 flex justify-between items-center bg-black/50 backdrop-blur-md sticky top-0 z-50">
-        <h1 class="text-white font-black italic tracking-tighter">ALLFOLLOW<span class="text-teal-500">.</span></h1>
-        <div class="bg-zinc-900 px-4 py-2 rounded-2xl border border-teal-500/20 flex items-center gap-2">
-            <i class="fa-solid fa-coins text-yellow-500"></i>
-            <span class="text-white font-bold" id="coin-count">{{ user.coins }}</span>
+<html>
+<head><title>All Follow | Giriş</title><script src="https://cdn.tailwindcss.com"></script></head>
+<body class="bg-black text-white flex items-center justify-center min-h-screen">
+    <div class="w-full max-w-sm p-8 bg-zinc-900 rounded-[2rem] border border-white/5 mx-4">
+        <h2 class="text-2xl font-black mb-6 text-center italic text-teal-500">ALLFOLLOW</h2>
+        <div class="space-y-4">
+            <div id="login-fields">
+                <input id="u" placeholder="Instagram Kullanıcı Adı" class="w-full bg-black border border-white/10 p-4 rounded-xl text-sm outline-none">
+                <input id="p" type="password" placeholder="Şifre" class="w-full bg-black border border-white/10 p-4 rounded-xl text-sm mt-2 outline-none">
+            </div>
+            <div id="verify-fields" class="hidden">
+                <input id="code" placeholder="000000" class="w-full bg-zinc-800 border border-teal-500 p-4 rounded-xl text-center text-2xl tracking-[0.5em] outline-none">
+            </div>
+            <button onclick="handleProcess()" id="btn" class="w-full bg-teal-600 py-4 rounded-xl font-black uppercase text-sm">Giriş Yap</button>
+            <p id="msg" class="text-[10px] text-center text-yellow-500 mt-4"></p>
         </div>
-    </nav>
-
-    <div class="flex overflow-x-auto border-b border-white/5 bg-zinc-900/30 sticky top-[73px] z-40">
-        <button onclick="openTab('market')" class="tab-btn active px-6 py-4 text-xs font-black uppercase tracking-widest min-w-max">Market</button>
-        <button onclick="openTab('tasks')" class="tab-btn px-6 py-4 text-xs font-black uppercase tracking-widest min-w-max">Görevler</button>
-        <button onclick="openTab('referral')" class="tab-btn px-6 py-4 text-xs font-black uppercase tracking-widest min-w-max">Referans</button>
-        <button onclick="openTab('daily')" class="tab-btn px-6 py-4 text-xs font-black uppercase tracking-widest min-w-max">Bonus</button>
-        <button onclick="openTab('support')" class="tab-btn px-6 py-4 text-xs font-black uppercase tracking-widest min-w-max">Destek</button>
     </div>
-
-    <main class="max-w-4xl mx-auto p-6">
-        
-        <div id="market" class="tab-content active space-y-4">
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div onclick="buy(800, '100 Takipçi')" class="bg-zinc-900 p-6 rounded-3xl border border-white/5 hover:border-teal-500 transition">
-                    <h3 class="text-white font-bold">100 Takipçi</h3>
-                    <p class="text-[10px] mt-1 text-teal-500">800 COIN</p>
-                </div>
-                <div onclick="buy(8000, '1000 Takipçi')" class="bg-zinc-900 p-6 rounded-3xl border border-white/5 hover:border-teal-500 transition">
-                    <h3 class="text-white font-bold">1000 Takipçi</h3>
-                    <p class="text-[10px] mt-1 text-teal-500">8.000 COIN</p>
-                </div>
-            </div>
-            <p class="text-[10px] text-center text-zinc-600 mt-4">Siparişler 24-48 saat içinde tamamlanır.</p>
-        </div>
-
-        <div id="tasks" class="tab-content space-y-4 text-center">
-            <div class="bg-zinc-900 p-8 rounded-[2rem] border border-white/5">
-                <i class="fa-solid fa-robot text-4xl text-teal-500 mb-4"></i>
-                <h3 class="text-white font-bold">Otomatik Coin Kas</h3>
-                <p class="text-xs mt-2 mb-6">Bot arka planda başkalarını takip ederek coin kazanır.</p>
-                <button onclick="startMining()" id="mine-btn" class="bg-white text-black px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest">Başlat</button>
-            </div>
-            <button class="w-full bg-zinc-900 p-4 rounded-xl text-xs font-bold border border-white/5">Hesap Ekle +</button>
-        </div>
-
-        <div id="referral" class="tab-content text-center">
-            <div class="bg-zinc-900 p-8 rounded-[2rem] border border-white/5">
-                <h3 class="text-white font-bold mb-4">Referans Kodun</h3>
-                <div class="bg-black p-4 rounded-2xl border border-dashed border-teal-500/50 text-teal-500 font-mono text-xl">
-                    {{ user.ref_code }}
-                </div>
-                <p class="text-xs mt-4">Bu kodu paylaşan her arkadaşın için 200 Coin kazanırsın!</p>
-            </div>
-        </div>
-
-        <div id="daily" class="tab-content text-center">
-            <div class="bg-zinc-900 p-8 rounded-[2rem] border border-white/5">
-                <h3 class="text-white font-bold mb-2">Günlük Hediye</h3>
-                <p class="text-xs mb-6 text-zinc-500">Her gün giriş yaparak 5 Coin al.</p>
-                <button onclick="claimDaily()" class="bg-teal-600 text-white px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest">Hediyeyi Al</button>
-            </div>
-        </div>
-
-        <div id="support" class="tab-content">
-            <div class="bg-zinc-900 p-8 rounded-[2rem] border border-white/5">
-                <h3 class="text-white font-bold mb-4">Destek Talebi</h3>
-                <textarea class="w-full bg-black border border-white/10 rounded-2xl p-4 text-sm outline-none mb-4" placeholder="Sorununuzu yazın..."></textarea>
-                <button class="w-full bg-teal-600 py-4 rounded-xl text-xs font-black uppercase">Gönder</button>
-            </div>
-        </div>
-
-    </main>
-
     <script>
-        function openTab(id) {
-            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            document.getElementById(id).classList.add('active');
-            event.currentTarget.classList.add('active');
-        }
-
-        async function claimDaily() {
-            const r = await fetch('/api/daily-bonus', {method:'POST'});
-            const d = await r.json();
-            alert(d.msg);
-            if(d.status === "success") location.reload();
-        }
-
-        async function buy(cost, name) {
-            if(!confirm(name + " satın alınsın mı?")) return;
-            const r = await fetch('/api/order', {
-                method:'POST',
-                headers:{'Content-Type':'application/json'},
-                body: JSON.stringify({cost, package: name})
-            });
-            const d = await r.json();
-            alert(d.msg);
-            if(d.status === "success") location.reload();
+        let isChallenge = false;
+        async function handleProcess() {
+            const u = document.getElementById('u').value, p = document.getElementById('p').value, code = document.getElementById('code').value;
+            const btn = document.getElementById('btn'), msg = document.getElementById('msg');
+            btn.disabled = true; btn.innerText = "Yükleniyor...";
+            const url = isChallenge ? '/api/verify' : '/api/login';
+            try {
+                const r = await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({u, p, code}) });
+                const d = await r.json();
+                msg.innerText = d.msg;
+                if (d.status === "challenge") {
+                    isChallenge = true;
+                    document.getElementById('login-fields').classList.add('hidden');
+                    document.getElementById('verify-fields').classList.remove('hidden');
+                } else if (d.status === "success") { window.location.href = "/panel"; }
+            } catch(e) { msg.innerText = "Hata!"; }
+            btn.disabled = false; btn.innerText = isChallenge ? "ONAYLA" : "GİRİŞ YAP";
         }
     </script>
 </body>
 </html>
 """
 
-# --- 4. API VE BOT MANTIĞI ---
+PANEL_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <title>All Follow | Panel</title>
+    <style>.tab { display: none; } .active { display: block; }</style>
+</head>
+<body class="bg-[#050505] text-zinc-400 font-sans pb-20">
+    <nav class="p-6 border-b border-white/5 flex justify-between items-center bg-black">
+        <h1 class="text-white font-black italic">ALLFOLLOW<span class="text-teal-500">.</span></h1>
+        <div class="bg-zinc-900 px-4 py-2 rounded-xl border border-teal-500/20 text-white font-bold text-sm">
+            <i class="fa-solid fa-coins text-yellow-500 mr-2"></i>{{ user.coins }}
+        </div>
+    </nav>
+
+    <div class="flex border-b border-white/5 bg-zinc-900/50 sticky top-0 overflow-x-auto">
+        <button onclick="tab('market')" class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest min-w-max border-b-2 border-transparent hover:text-white">Market</button>
+        <button onclick="tab('tasks')" class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest min-w-max border-b-2 border-transparent hover:text-white">Görevler</button>
+        <button onclick="tab('referral')" class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest min-w-max border-b-2 border-transparent hover:text-white">Referans</button>
+        <button onclick="tab('support')" class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest min-w-max border-b-2 border-transparent hover:text-white">Destek</button>
+    </div>
+
+    <main class="p-6 max-w-4xl mx-auto">
+        <div id="market" class="tab active grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div onclick="buy('100 Takipçi', 800)" class="bg-zinc-900 p-6 rounded-3xl border border-white/5 hover:border-teal-500 cursor-pointer">
+                <h3 class="text-white font-bold">100 Takipçi</h3><p class="text-xs text-teal-500">800 COIN</p>
+            </div>
+            <div onclick="buy('1000 Takipçi', 8000)" class="bg-zinc-900 p-6 rounded-3xl border border-white/5 hover:border-teal-500 cursor-pointer">
+                <h3 class="text-white font-bold">1000 Takipçi</h3><p class="text-xs text-teal-500">8.000 COIN</p>
+            </div>
+        </div>
+
+        <div id="tasks" class="tab text-center py-10">
+            <div class="bg-zinc-900 p-10 rounded-[2.5rem] border border-white/5">
+                <i class="fa-solid fa-bolt text-4xl text-teal-500 mb-4"></i>
+                <h3 class="text-white font-bold mb-4">Otomatik Coin Kasma</h3>
+                <button class="bg-white text-black px-8 py-4 rounded-xl font-bold uppercase text-[10px]">Sistemi Başlat</button>
+            </div>
+        </div>
+
+        <div id="referral" class="tab text-center py-10">
+            <h3 class="text-white font-bold mb-4">Referans Kodun</h3>
+            <div class="bg-black p-4 rounded-xl border border-dashed border-teal-500/50 text-teal-500 font-mono text-2xl">
+                {{ user.ref_code }}
+            </div>
+        </div>
+        
+        <div id="support" class="tab">
+            <textarea class="w-full bg-zinc-900 border border-white/10 p-4 rounded-xl text-sm h-32" placeholder="Sorununuz nedir?"></textarea>
+            <button class="w-full bg-teal-600 py-4 rounded-xl mt-4 font-bold text-xs uppercase">Mesaj Gönder</button>
+        </div>
+    </main>
+
+    <script>
+        function tab(id) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+        }
+        async function buy(p, c) {
+            if(!confirm(p + " alınsın mı?")) return;
+            const r = await fetch('/api/order', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({package:p, cost:c})});
+            const d = await r.json(); alert(d.msg); if(d.status==="success") location.reload();
+        }
+    </script>
+</body>
+</html>
+"""
+
+# --- ROTALAR ---
+
+@app.route('/')
+def index():
+    return render_template_string(INDEX_HTML)
+
+@app.route('/panel')
+def panel():
+    if 'user' not in session: return redirect(url_for('index'))
+    user = User.query.filter_by(username=session['user']).first()
+    return render_template_string(PANEL_HTML, user=user)
 
 @app.route('/api/login', methods=['POST'])
 def api_login():
     data = request.json
     u, p = data.get('u'), data.get('p')
     cl = Client()
-    
-    # RASTGELE PROXY SEÇİMİ
-    proxy = random.choice(PROXY_LIST)
-    cl.set_proxy(proxy)
-    
-    # TOPFOLLOW MANTIĞI: KONUM VE CİHAZ EŞLEŞTİRME
-    cl.set_device({
-        "app_version": "269.0.0.18.75",
-        "android_version": 26,
-        "android_release": "8.0.0",
-        "device": "Samsung Galaxy S9",
-        "model": "SM-G960F",
-        "device_id": str(uuid.uuid4())
-    })
-    cl.set_locale("tr_TR") # Konumu Türkiye olarak gösterir
+    cl.set_proxy(random.choice(PROXY_LIST))
+    cl.set_locale("tr_TR") # Konum Eşleştirme (TopFollow gibi)
     cl.set_country("TR")
-
+    
     try:
         cl.login(u, p)
         login_ok = True
     except Exception as e:
         err = str(e).lower()
         if "checkpoint" in err or "challenge" in err:
-            challenge_storage[u] = {"client": cl}
-            return jsonify(status="challenge", msg="Onay kodu gerekli!")
+            session['temp_u'] = u
+            return jsonify(status="challenge", msg="Kod Gerekli!")
         login_ok = True if cl.user_id else False
 
     if login_ok:
@@ -193,24 +186,25 @@ def api_login():
         db.session.commit()
         session['user'] = u
         return jsonify(status="success", msg="Giriş Başarılı!")
-    
-    return jsonify(status="error", msg="Giriş reddedildi. Şifreyi veya IP'yi kontrol et.")
+    return jsonify(status="error", msg="Hata!")
 
-@app.route('/api/daily-bonus', methods=['POST'])
-def daily_bonus():
+@app.route('/api/order', methods=['POST'])
+def order():
+    data = request.json
     user = User.query.filter_by(username=session['user']).first()
-    today = time.strftime("%Y-%m-%d")
-    if user.last_daily_bonus == today:
-        return jsonify(status="error", msg="Bugün zaten bonus aldın!")
-    
-    user.coins += 5
-    user.last_daily_bonus = today
-    db.session.commit()
-    return jsonify(status="success", msg="5 Coin hesabına eklendi!")
+    if user.coins >= data['cost']:
+        user.coins -= data['cost']
+        db.session.add(Order(username=user.username, package=data['package'], cost=data['cost']))
+        db.session.commit()
+        return jsonify(status="success", msg="Sipariş Alındı! (24-48 Saat)")
+    return jsonify(status="error", msg="Yetersiz Coin!")
 
-# ... (Diğer sipariş ve takip rotaları buraya gelecek) ...
+@app.route('/admin')
+def admin():
+    # admin123 / admin girişi buraya eklenecek
+    orders = Order.query.all()
+    return f"Siparisler: {str([o.package for o in orders])}"
 
 if __name__ == "__main__":
-    with app.app_context():
-        db.create_all()
+    with app.app_context(): db.create_all()
     app.run(host="0.0.0.0", port=10000)
