@@ -7,6 +7,31 @@ SESSION_FOLDER = "sessions"
 if not os.path.exists(SESSION_FOLDER):
     os.makedirs(SESSION_FOLDER)
 
+# 1. Önce kütüphaneleri içe aktar (Import)
+import os, random, time, uuid, json
+from flask import Flask, request, jsonify, session
+from flask_sqlalchemy import SQLAlchemy
+from instagrapi import Client
+
+# 2. BURAYA EKLE: Uygulamayı ve Veritabanını Tanımla
+app = Flask(__name__)
+app.secret_key = "all_follow_v15_secret"
+app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///all_follow_v15.db"
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
+
+# 3. ŞİMDİ ROTALARI TANIMLAYABİLİRSİN
+@app.route('/api/login', methods=['POST'])
+def api_login():
+    # ... senin login fonksiyonun içeriği buraya gelecek ...
+    return jsonify(status="success")
+
+# 4. EN SONA DA ÇALIŞTIRMA KOMUTUNU EKLE
+if __name__ == "__main__":
+    with app.app_context():
+        db.create_all()
+    app.run(host="0.0.0.0", port=10000)
+
 @app.route('/api/login', methods=['POST'])
 def api_login():
     data = request.json
