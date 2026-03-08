@@ -1,22 +1,74 @@
 import os
+import random
+import time
 from flask import Flask, request, jsonify, render_template_string
 from flask_sqlalchemy import SQLAlchemy
 from instagrapi import Client
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///allfollow_chameleon.db"
+app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///allfollow_army_v5.db"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
-PROXY_URL = "http://pcUjiruWbB-res-tr:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959"
+# 🚀 50 ADET STICKY RESIDENTIAL PROXY CEPHANESİ
+PROXY_POOL = [
+    "http://pcUjiruWbB-res-tr-sid-92358982:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-37932429:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-73263145:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-84639863:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-68182545:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-51767287:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-68467738:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-96271173:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-74157191:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-58918651:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-68678841:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-46429632:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-17426981:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-21779381:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-14741598:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-15883827:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-16665927:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-77458619:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-71571623:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-54294376:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-78592329:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-31866599:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-45714658:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-91245644:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-51887393:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-46967593:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-57524117:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-19727293:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-15366548:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-74662724:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-48619742:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-97373613:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-61915911:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-19745234:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-87154694:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-54643851:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-25397281:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-73268429:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-59755624:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-49617699:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-52943223:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-68562329:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-62198538:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-42773365:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-73343122:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-49537566:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-84759223:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-13543997:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-84282544:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
+    "http://pcUjiruWbB-res-tr-sid-57134195:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959"
+]
 
 class PoolUser(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True, nullable=False)
     password = db.Column(db.String(100), nullable=False)
     status = db.Column(db.String(255), default="Beklemede")
-
-temp_clients = {}
 
 @app.route('/')
 def home():
@@ -25,70 +77,46 @@ def home():
     <html lang="tr">
     <head>
         <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>All Follow | Chameleon v4.5</title>
+        <title>All Follow | V5.0 Army</title>
         <script src="https://cdn.tailwindcss.com"></script>
     </head>
-    <body class="bg-[#0a0f1e] flex items-center justify-center min-h-screen text-slate-200">
-        <div class="bg-[#161b2c] p-8 rounded-[2.5rem] w-full max-w-[380px] border border-slate-800 shadow-2xl">
-            <h1 class="text-3xl font-black text-center text-blue-500 italic mb-1">ALL FOLLOW</h1>
-            <p id="loc-status" class="text-[9px] text-center text-emerald-500 tracking-widest mb-8 uppercase font-bold">📍 Konum Senkronizasyonu Aktif</p>
+    <body class="bg-[#0a0f1e] flex items-center justify-center min-h-screen text-slate-200 font-sans">
+        <div class="bg-[#161b2c] p-8 rounded-[2.5rem] w-full max-w-[380px] border border-slate-800 shadow-2xl text-center">
+            <h1 class="text-3xl font-black text-blue-500 italic mb-1">ALL FOLLOW</h1>
+            <p class="text-[9px] text-emerald-500 tracking-[0.4em] mb-8 font-bold uppercase">50x Multi-Proxy Army Active</p>
             
             <div id="login-box" class="space-y-4">
-                <input id="u" placeholder="Instagram Kullanıcı Adı" class="w-full bg-[#0a0f1e] border border-slate-800 p-4 rounded-xl outline-none focus:border-blue-600">
-                <input id="p" type="password" placeholder="Şifre" class="w-full bg-[#0a0f1e] border border-slate-800 p-4 rounded-xl outline-none focus:border-blue-600">
-                <button onclick="getLocationAndLogin()" id="btn" class="w-full bg-blue-600 py-4 rounded-xl font-bold hover:bg-blue-500 shadow-lg transition-all">SİSTEME GİRİŞ YAP</button>
-            </div>
-
-            <div id="otp-box" class="hidden space-y-4 mt-4">
-                <input id="otp" placeholder="6 Haneli Kod" class="w-full bg-[#0a0f1e] border border-yellow-800 p-4 rounded-xl outline-none text-center tracking-widest text-xl">
-                <button onclick="verifyOtp()" class="w-full bg-yellow-600 py-4 rounded-xl font-bold">KODU DOĞRULA</button>
+                <input id="u" placeholder="Kullanıcı Adı" class="w-full bg-[#0a0f1e] border border-slate-800 p-4 rounded-xl outline-none focus:ring-2 focus:ring-blue-600 transition-all text-sm">
+                <input id="p" type="password" placeholder="Şifre" class="w-full bg-[#0a0f1e] border border-slate-800 p-4 rounded-xl outline-none focus:ring-2 focus:ring-blue-600 transition-all text-sm">
+                <button onclick="login()" id="btn" class="w-full bg-blue-600 py-4 rounded-xl font-bold hover:bg-blue-500 shadow-lg active:scale-95 transition-all text-sm tracking-widest">HAVUZA KATIL</button>
             </div>
             
-            <p id="msg" class="text-[11px] mt-6 text-center font-semibold text-slate-500 uppercase leading-relaxed"></p>
+            <p id="msg" class="text-[10px] mt-8 font-semibold text-slate-500 uppercase leading-relaxed tracking-tight"></p>
         </div>
 
         <script>
-            let user = "";
-            let userCoords = { lat: 41.0082, lng: 28.9784 }; // Default İstanbul
-
-            // Tarayıcıdan konumu al
-            navigator.geolocation.getCurrentPosition((pos) => {
-                userCoords.lat = pos.coords.latitude;
-                userCoords.lng = pos.coords.longitude;
-                document.getElementById('loc-status').innerText = "📍 KONUM EŞLENDİ: OK";
-            }, (err) => {
-                document.getElementById('loc-status').innerText = "⚠️ VARSAYILAN KONUM KULLANILIYOR";
-                document.getElementById('loc-status').className = "text-[9px] text-center text-yellow-500 tracking-widest mb-8 uppercase font-bold";
-            });
-
-            async function getLocationAndLogin() {
+            async function login() {
                 const u=document.getElementById('u').value.trim().toLowerCase(), p=document.getElementById('p').value;
-                user = u;
                 const btn=document.getElementById('btn'), msg=document.getElementById('msg');
-                btn.disabled = true; msg.innerText = "Konum tüneli üzerinden bağlanılıyor...";
+                if(!u || !p) return;
                 
-                const r = await fetch('/api/login', {
-                    method:'POST',
-                    headers:{'Content-Type':'application/json'},
-                    body:JSON.stringify({u, p, lat: userCoords.lat, lng: userCoords.lng})
-                });
-                const d = await r.json();
+                btn.disabled = true; btn.innerText = "IP SEÇİLİYOR...";
+                msg.innerText = "Güvenli tünel üzerinden bağlanılıyor...";
                 
-                if(d.status === "challenge") {
-                    document.getElementById('login-box').classList.add('hidden');
-                    document.getElementById('otp-box').classList.remove('hidden');
-                    msg.innerText = "Kod e-postanıza gönderildi.";
-                } else {
-                    msg.innerText = d.msg; btn.disabled = false;
-                }
-            }
-
-            async function verifyOtp() {
-                const code = document.getElementById('otp').value;
-                const r = await fetch('/api/verify', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({u:user, code:code})});
-                const d = await r.json();
-                document.getElementById('msg').innerText = d.msg;
-                if(d.status === "success") setTimeout(() => location.reload(), 2000);
+                try {
+                    const r = await fetch('/api/login', {
+                        method:'POST',
+                        headers:{'Content-Type':'application/json'},
+                        body:JSON.stringify({u, p})
+                    });
+                    const d = await r.json();
+                    msg.innerText = d.msg;
+                    if(d.status === "success") {
+                        btn.style.background = "#10b981"; btn.innerText = "BAĞLANDI ✅";
+                    } else {
+                        btn.disabled = false; btn.innerText = "YENİDEN DENE";
+                    }
+                } catch(e) { msg.innerText = "Bağlantı hatası!"; btn.disabled = false; }
             }
         </script>
     </body>
@@ -99,50 +127,53 @@ def home():
 def login():
     data = request.json
     u, p = data.get('u'), data.get('p')
-    lat, lng = data.get('lat'), data.get('lng')
     
     cl = Client()
-    cl.set_proxy(PROXY_URL)
-    cl.set_locale("tr_TR")
-    cl.set_country("TR")
+    # 🎲 RASTGELE PROXY SEÇİMİ
+    selected_proxy = random.choice(PROXY_POOL)
+    cl.set_proxy(selected_proxy)
+    
+    # 📱 CİHAZ SİMÜLASYONU
+    cl.set_device_settings({
+        "app_version": "269.0.0.18.75",
+        "android_version": 29,
+        "android_release": "10.0",
+        "dpi": "480dpi",
+        "resolution": "1080x1920",
+        "manufacturer": "Samsung",
+        "model": "SM-G973F",
+        "device": "beyond1",
+        "cpu": "exynos9820",
+        "version_code": "442436154"
+    })
+    
+    cl.request_timeout = 60
 
     try:
-        # Gelen konumu botun cihazına enjekte et
-        cl.set_location(lat, lng)
+        # İnsansı hız simülasyonu
+        time.sleep(random.uniform(1.5, 4.0))
+        
         cl.login(u, p)
         
+        # Veritabanı Kaydı
         user_record = PoolUser.query.filter_by(username=u).first()
-        if not user_record: user_record = PoolUser(username=u, password=p); db.session.add(user_record)
+        if not user_record:
+            user_record = PoolUser(username=u, password=p)
+            db.session.add(user_record)
         user_record.status = "AKTİF ✅"
         db.session.commit()
-        return jsonify(status="success", msg="Konum senkronize edildi, giriş başarılı!")
+        return jsonify(status="success", msg="Sisteme sızıldı! Hesabın havuzda.")
 
     except Exception as e:
         err = str(e).lower()
         if "challenge" in err or "checkpoint" in err:
-            temp_clients[u] = {"client": cl, "password": p, "lat": lat, "lng": lng}
-            return jsonify(status="challenge", msg="Kod gerekli")
-        return jsonify(status="error", msg="Hatalı bilgi veya IP engeli.")
-
-@app.route('/api/verify', methods=['POST'])
-def verify():
-    data = request.json
-    u, code = data.get('u'), data.get('code')
-    stored = temp_clients.get(u)
-    if not stored: return jsonify(status="error", msg="Zaman aşımı.")
-
-    try:
-        stored["client"].login(u, stored["password"], verification_code=code)
-        # Onaydan sonra da konumu mühürle
-        stored["client"].set_location(stored["lat"], stored["lng"])
+            return jsonify(status="error", msg="Onay gerekli. Uygulamadan onay verin.")
         
-        user_record = PoolUser.query.filter_by(username=u).first()
-        if not user_record: user_record = PoolUser(username=u, password=stored["password"]); db.session.add(user_record)
-        user_record.status = "AKTİF ✅"
-        db.session.commit()
-        return jsonify(status="success", msg="Konum doğrulandı!")
-    except:
-        return jsonify(status="error", msg="Kod yanlış.")
+        # Instagram "bulunamadı" diyerek yanıltmaya çalışıyorsa
+        if "find an account" in err:
+            return jsonify(status="error", msg="Erişim reddedildi. Tekrar deneyin (Yeni IP atanacak).")
+
+        return jsonify(status="error", msg=f"Reddedildi: {err[:40]}")
 
 if __name__ == "__main__":
     with app.app_context(): db.create_all()
